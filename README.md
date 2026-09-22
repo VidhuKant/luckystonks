@@ -1,6 +1,6 @@
 # LuckyStonks
 
-<img src="https://raw.githubusercontent.com/VidhuKant/luckystonks/refs/heads/main/luckysharma.gif" width="600">
+<img src="https://raw.githubusercontent.com/VidhuKant/luckystonks/refs/heads/main/luckysharma.gif" width="400">
 
 The only 'Laxmi Chit Fund' you need !!!
 
