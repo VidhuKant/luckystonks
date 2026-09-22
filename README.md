@@ -1,5 +1,7 @@
 # LuckyStonks
 
+![Lucky Sharma](luckysharma.gif)
+
 The only 'Laxmi Chit Fund' you need !!!
 
 ![Lucky Sharma](luckysharma.png)
