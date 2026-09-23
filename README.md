@@ -6,6 +6,29 @@ The only 'Laxmi Chit Fund' you need !!!
 
 ![Lucky Sharma](luckysharma.png)
 
+## Project layout (skeleton)
+
+## Ports
+
+| Service | Port |
+|---------|------|
+| Trading gRPC | `50051` |
+| LLM Insight gRPC | `50070` |
+| Web HTTP (optional, last) | `8765` |
+
+## Quick setup
+
+```bash
+cd /Users/prathamshah/BITS/AOS/Project/luckystonks
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+chmod +x scripts/gen_proto.sh
+./scripts/gen_proto.sh
+export PYTHONPATH=.
+python -c "from luckystonks.matching.engine import Engine; print('ok')"
+```
+
 # License
 
 The MIT License (MIT)

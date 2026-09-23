@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package luckystonks;
+
+// LLM insight service (separate process; read-only, phase 1).
+service Insight {
+  rpc GetInsight(GetInsightRequest) returns (GetInsightReply);
+}
+
+message GetInsightRequest {
+  string request_id = 1;
+  string query = 2;
+  string context = 3;
+}
+
+message GetInsightReply {
+  string request_id = 1;
+  string answer = 2;
+}

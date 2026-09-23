@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package luckystonks;
+
+// Shared menu for the trading gRPC server (Login, Post, Get).
+service Trading {
+  rpc Login(LoginRequest) returns (LoginReply);
+  rpc Post(PostRequest) returns (PostReply);
+  rpc Get(GetRequest) returns (GetReply);
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginReply {
+  string status = 1;
+  string token = 2;
+}
+
+message PostRequest {
+  string token = 1;
+  string type = 2;
+  bytes data = 3;
+}
+
+message PostReply {
+  string status = 1;
+  string detail = 2;
+}
+
+message GetRequest {
+  string token = 1;
+  string type = 2;
+  string params = 3;
+}
+
+message GetReply {
+  string status = 1;
+  repeated GetItem items = 2;
+}
+
+message GetItem {
+  string id = 1;
+  bytes data = 2;
+}
