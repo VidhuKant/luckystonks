@@ -13,8 +13,11 @@ The only 'Laxmi Chit Fund' you need !!!
 | Service | Port |
 |---------|------|
 | Trading gRPC | `50051` |
-| LLM Insight gRPC | `50070` |
+| Insight gRPC (this repo’s LLM node) | `50070` |
+| vLLM HTTP (external; not pip-installed here) | `8000` |
 | Web HTTP (optional, last) | `8765` |
+
+Insight path: client → `GetInsight` on `:50070` → (later) HTTP to vLLM on `:8000`. See [INIT.md](INIT.md).
 
 ## Quick setup
 

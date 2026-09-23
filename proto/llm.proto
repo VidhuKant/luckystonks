@@ -2,7 +2,8 @@ syntax = "proto3";
 
 package luckystonks;
 
-// LLM insight service (separate process; read-only, phase 1).
+// Insight gRPC node in this repo (:50070). Clients call GetInsight here.
+// Inference uses external vLLM OpenAI-compatible HTTP on :8000 (not in this repo).
 service Insight {
   rpc GetInsight(GetInsightRequest) returns (GetInsightReply);
 }

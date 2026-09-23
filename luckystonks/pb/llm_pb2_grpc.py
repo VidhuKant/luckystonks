@@ -26,7 +26,8 @@ if _version_not_supported:
 
 
 class InsightStub:
-    """LLM insight service (separate process; read-only, phase 1).
+    """Insight gRPC node in this repo (:50070). Clients call GetInsight here.
+    Inference uses external vLLM OpenAI-compatible HTTP on :8000 (not in this repo).
     """
 
     def __init__(self, channel):
@@ -43,7 +44,8 @@ class InsightStub:
 
 
 class InsightServicer:
-    """LLM insight service (separate process; read-only, phase 1).
+    """Insight gRPC node in this repo (:50070). Clients call GetInsight here.
+    Inference uses external vLLM OpenAI-compatible HTTP on :8000 (not in this repo).
     """
 
     def GetInsight(self, request, context):
@@ -69,7 +71,8 @@ def add_InsightServicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class Insight:
-    """LLM insight service (separate process; read-only, phase 1).
+    """Insight gRPC node in this repo (:50070). Clients call GetInsight here.
+    Inference uses external vLLM OpenAI-compatible HTTP on :8000 (not in this repo).
     """
 
     @staticmethod
