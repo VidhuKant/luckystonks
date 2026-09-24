@@ -6,13 +6,14 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional
 
 Side = Literal["BUY", "SELL"]
+
 @dataclass
 class User:
     """A trader's account """
 
-    user_id: str
-    password: str
-    cash: int
+    user_id: str = ""
+    password: str = ""
+    cash: int = 0
     shares: Dict[str, int] = field(default_factory=dict)
 
 
@@ -64,7 +65,7 @@ class Book:
     def best_bid(self) -> Optional[Order]:
         return self.bids[0] if self.bids else None
 
-        
+
     def best_ask(self) -> Optional[Order]:
         return self.asks[0] if self.asks else None
 
