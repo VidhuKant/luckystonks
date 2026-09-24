@@ -1,36 +1,83 @@
-"""gRPC Trading servicer — phone, not the brain; delegates to Engine.apply later."""
+import json
+import uuid
 
-from __future__ import annotations
-
-from typing import Any, Dict
-
-from luckystonks.matching.engine import Engine
-from luckystonks.matching.models import Command
+from luckystonks.matching.models import Command, User
+from luckystonks.pb import trading_pb2
 
 
-class TradingServicer:
-    """Handles Login, Post, and Get RPCs for the trading service."""
-
-    def __init__(self, engine: Engine) -> None:
+class LuckyStonksServicer:
+    def __init__(self, engine):
         self.engine = engine
-        self.sessions: Dict[str, str] = {}
 
-    def Login(self, username: str, password: str) -> tuple[str, str]:
-        """Authenticate and return (status, token)."""
-        raise NotImplementedError
+        # map tokens and usernames
+        self.sessions = {}
 
-    def Post(self, token: str, post_type: str, data: bytes) -> tuple[str, str]:
-        """Validate session, build Command, call engine.apply, return status."""
-        raise NotImplementedError
+    def Login(self, request, ctx):
+        user = self.engine.users.get(request.user_id)
 
-    def Get(self, token: str, get_type: str, params: str) -> tuple[str, list]:
-        """Validate session and return snapshot data for the requested view."""
-        raise NotImplementedError
+        # invalid request
+        if user is None:
+            return trading_pb2.LoginReply(status="ERR", token="")
 
-    def _user_id_for(self, token: str) -> str:
-        """Map session token to user_id."""
-        raise NotImplementedError
+        # incorrect password
+        if user.password != request.password:
+            return trading_pb2.LoginReply(status="ERR", token="")
 
-    def _command_from_post(self, user_id: str, post_type: str, data: bytes) -> Command:
-        """Parse Post payload into a Command for the engine."""
-        raise NotImplementedError
+        # generate token
+        token = str(uuid.uuid4())
+        self.sessions[token] = user.user_id
+
+        # respond with token
+        return trading_pb2.LoginReply(status="OK", token=token)
+
+    def Post(self, request, ctx):
+        user_id = self.sessions.get(request.token)
+
+        # invalid user
+        if user_id is None:
+            return trading_pb2.PostReply(status="ERR", detail="invalid session")
+
+        try:
+            command = self._parse_order(user_id, request)
+            res = self.engine.apply(command)
+            return trading_pb2.PostReply(status=res.status, detail=res.detail)
+        except ValueError as err:
+            return trading_pb2.PostReply(status="ERR", detail=str(err))
+
+    def Get(self, request, ctx):
+        user_id = self.sessions.get(request.token)
+
+        # invalid user
+        if user_id is None:
+            return trading_pb2.PostReply(status="ERR", detail="invalid session")
+
+        data = self.engine.snapshot(request.type, user_id, request.params)
+        return self._make_get_reply(data)
+
+    def _parse_order(self, user_id, request):
+        if request.type != "ORDER":
+            raise ValueError("unsupported post type")
+
+        payload = json.loads(request.data.decode("UTF-8"))
+
+        return Command(
+            client_request_id=payload["client_request_id"],
+            user_id=user_id,
+            side=payload["side"],
+            symbol=payload["symbol"],
+            price=int(payload["price"]),
+            qty=int(payload["qty"]),
+        )
+
+    def _make_get_reply(self, data):
+        items = []
+
+        for item in data:
+            items.append(
+                trading_pb2.GetItem(
+                    id=str(item["id"]),
+                    data=json.dumps(item["data"]).encode("UTF-8"),
+                )
+            )
+
+        return trading_pb2.GetReply(status="OK", items=items)
