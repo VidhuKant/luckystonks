@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from luckystonks.matching.models import Command, User
+from luckystonks.matching.models import Command
 from luckystonks.pb import trading_pb2
 
 
@@ -49,7 +49,7 @@ class LuckyStonksServicer:
 
         # invalid user
         if user_id is None:
-            return trading_pb2.PostReply(status="ERR", detail="invalid session")
+            return trading_pb2.GetReply(status="ERR", detail="invalid session")
 
         data = self.engine.snapshot(request.type, user_id, request.params)
         return self._make_get_reply(data)

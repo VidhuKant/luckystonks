@@ -1,7 +1,8 @@
 from luckystonks.matching.engine import Engine
 from luckystonks.matching.models import Command, Result
 
-def test_resting_sell_then_buy_trade()-> None:
+
+def test_resting_sell_then_buy_trade() -> None:
     engine = Engine()
     engine.seed_demo_users()
 
@@ -25,6 +26,7 @@ def test_reject_sell_without_shares() -> None:
     r = engine.apply(Command("x", "alice", "SELL", "AAPL", 150, 1))
     assert r.status == "REJECTED"
     assert len(engine.trades) == 0
+
 
 def test_idempotent_client_request_id() -> None:
     engine = Engine()

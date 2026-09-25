@@ -6,6 +6,7 @@ Does not start vLLM. For a local inference server, use scripts/run_vllm.sh as a 
 
 from __future__ import annotations
 
+
 def main() -> None:
     """Start Insight gRPC via luckystonks.llm.assistant.main (stub)."""
     from luckystonks.llm.assistant import main as serve_insight

@@ -4,47 +4,44 @@
 # source: trading.proto
 # Protobuf Python Version: 7.35.1
 """Generated protocol buffer code."""
+
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import descriptor_pool as _descriptor_pool
 from google.protobuf import runtime_version as _runtime_version
 from google.protobuf import symbol_database as _symbol_database
 from google.protobuf.internal import builder as _builder
+
 _runtime_version.ValidateProtobufRuntimeVersion(
-    _runtime_version.Domain.PUBLIC,
-    7,
-    35,
-    1,
-    '',
-    'trading.proto'
+    _runtime_version.Domain.PUBLIC, 7, 35, 1, "", "trading.proto"
 )
 # @@protoc_insertion_point(imports)
 
 _sym_db = _symbol_database.Default()
 
 
-
-
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\rtrading.proto\x12\x0bluckystonks\"2\n\x0cLoginRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t\"+\n\nLoginReply\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\r\n\x05token\x18\x02 \x01(\t\"8\n\x0bPostRequest\x12\r\n\x05token\x18\x01 \x01(\t\x12\x0c\n\x04type\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c\"+\n\tPostReply\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\"9\n\nGetRequest\x12\r\n\x05token\x18\x01 \x01(\t\x12\x0c\n\x04type\x18\x02 \x01(\t\x12\x0e\n\x06params\x18\x03 \x01(\t\"?\n\x08GetReply\x12\x0e\n\x06status\x18\x01 \x01(\t\x12#\n\x05items\x18\x02 \x03(\x0b\x32\x14.luckystonks.GetItem\"#\n\x07GetItem\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x32\xb7\x01\n\x07Trading\x12;\n\x05Login\x12\x19.luckystonks.LoginRequest\x1a\x17.luckystonks.LoginReply\x12\x38\n\x04Post\x12\x18.luckystonks.PostRequest\x1a\x16.luckystonks.PostReply\x12\x35\n\x03Get\x12\x17.luckystonks.GetRequest\x1a\x15.luckystonks.GetReplyb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(
+    b'\n\rtrading.proto\x12\x0bluckystonks"2\n\x0cLoginRequest\x12\x10\n\x08username\x18\x01 \x01(\t\x12\x10\n\x08password\x18\x02 \x01(\t"+\n\nLoginReply\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\r\n\x05token\x18\x02 \x01(\t"8\n\x0bPostRequest\x12\r\n\x05token\x18\x01 \x01(\t\x12\x0c\n\x04type\x18\x02 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x03 \x01(\x0c"+\n\tPostReply\x12\x0e\n\x06status\x18\x01 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t"9\n\nGetRequest\x12\r\n\x05token\x18\x01 \x01(\t\x12\x0c\n\x04type\x18\x02 \x01(\t\x12\x0e\n\x06params\x18\x03 \x01(\t"?\n\x08GetReply\x12\x0e\n\x06status\x18\x01 \x01(\t\x12#\n\x05items\x18\x02 \x03(\x0b\x32\x14.luckystonks.GetItem"#\n\x07GetItem\x12\n\n\x02id\x18\x01 \x01(\t\x12\x0c\n\x04\x64\x61ta\x18\x02 \x01(\x0c\x32\xb7\x01\n\x07Trading\x12;\n\x05Login\x12\x19.luckystonks.LoginRequest\x1a\x17.luckystonks.LoginReply\x12\x38\n\x04Post\x12\x18.luckystonks.PostRequest\x1a\x16.luckystonks.PostReply\x12\x35\n\x03Get\x12\x17.luckystonks.GetRequest\x1a\x15.luckystonks.GetReplyb\x06proto3'
+)
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
-_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'trading_pb2', _globals)
+_builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, "trading_pb2", _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
-  DESCRIPTOR._loaded_options = None
-  _globals['_LOGINREQUEST']._serialized_start=30
-  _globals['_LOGINREQUEST']._serialized_end=80
-  _globals['_LOGINREPLY']._serialized_start=82
-  _globals['_LOGINREPLY']._serialized_end=125
-  _globals['_POSTREQUEST']._serialized_start=127
-  _globals['_POSTREQUEST']._serialized_end=183
-  _globals['_POSTREPLY']._serialized_start=185
-  _globals['_POSTREPLY']._serialized_end=228
-  _globals['_GETREQUEST']._serialized_start=230
-  _globals['_GETREQUEST']._serialized_end=287
-  _globals['_GETREPLY']._serialized_start=289
-  _globals['_GETREPLY']._serialized_end=352
-  _globals['_GETITEM']._serialized_start=354
-  _globals['_GETITEM']._serialized_end=389
-  _globals['_TRADING']._serialized_start=392
-  _globals['_TRADING']._serialized_end=575
+    DESCRIPTOR._loaded_options = None
+    _globals["_LOGINREQUEST"]._serialized_start = 30
+    _globals["_LOGINREQUEST"]._serialized_end = 80
+    _globals["_LOGINREPLY"]._serialized_start = 82
+    _globals["_LOGINREPLY"]._serialized_end = 125
+    _globals["_POSTREQUEST"]._serialized_start = 127
+    _globals["_POSTREQUEST"]._serialized_end = 183
+    _globals["_POSTREPLY"]._serialized_start = 185
+    _globals["_POSTREPLY"]._serialized_end = 228
+    _globals["_GETREQUEST"]._serialized_start = 230
+    _globals["_GETREQUEST"]._serialized_end = 287
+    _globals["_GETREPLY"]._serialized_start = 289
+    _globals["_GETREPLY"]._serialized_end = 352
+    _globals["_GETITEM"]._serialized_start = 354
+    _globals["_GETITEM"]._serialized_end = 389
+    _globals["_TRADING"]._serialized_start = 392
+    _globals["_TRADING"]._serialized_end = 575
 # @@protoc_insertion_point(module_scope)

@@ -1,22 +1,18 @@
-from __future__ import annotations
-
-from typing import Any, Dict, List, Optional
-
-from luckystonks.matching.models import Book, Command, Result, Trade, User, Order
-
 from copy import deepcopy
+from typing import Any
+
+from luckystonks.matching.models import Book, Command, Order, Result, Trade, User
+
 
 class Engine:
-    """Owns the users, books, trades, and idempotency of the client by usning client's req id """
-
     def __init__(self) -> None:
-        self.users: Dict[str, User] = {}
-        self.books: Dict[str, Book] = {}
-        self.trades: List[Trade] = []
+        self.users: dict[str, User] = {}
+        self.books: dict[str, Book] = {}
+        self.trades: list[Trade] = []
         self._next_order_id: int = 1
         self._next_trade_id: int = 1
         self._next_seq: int = 1
-        self.results_by_request: Dict[str, Result] = {}
+        self.results_by_request: dict[str, Result] = {}
 
     def seed_demo_users(self) -> None:
         # demo users for testing
@@ -24,7 +20,7 @@ class Engine:
         self.users["alice"] = User("alice", "alice", cash=10_000, shares={})
 
     def apply(self, command: Command) -> Result:
-        """validate order and then send for further processing """
+        """validate order and then send for further processing"""
         if command.client_request_id in self.results_by_request:
             return deepcopy(self.results_by_request[command.client_request_id])
 
@@ -36,20 +32,23 @@ class Engine:
 
         # if user is a seller
         if command.side == "SELL":
-            
-            if user.shares.get(command.symbol,0)< command.qty:
-                result = Result(status="REJECTED",message="You don't have enough shares to sell")
+            if user.shares.get(command.symbol, 0) < command.qty:
+                result = Result(
+                    status="REJECTED", message="You don't have enough shares to sell"
+                )
                 self.results_by_request[command.client_request_id] = result
                 return deepcopy(result)
         elif command.side == "BUY":
-            if user.cash < command.price*command.qty:
-                result = Result(status="REJECTED", message="You don't have enough cash to buy")
+            if user.cash < command.price * command.qty:
+                result = Result(
+                    status="REJECTED", message="You don't have enough cash to buy"
+                )
                 self.results_by_request[command.client_request_id] = result
                 return deepcopy(result)
         else:
             result = Result(status="REJECTED", message="Invalid side")
             self.results_by_request[command.client_request_id] = result
-            return deepcopy(result) 
+            return deepcopy(result)
 
         order = Order(
             order_id=self._next_order_id,
@@ -66,7 +65,6 @@ class Engine:
         self._next_seq += 1
 
         book = self._book_for(command.symbol)
-
 
         if command.side == "BUY":
             while order.remaining_qty > 0:
@@ -118,10 +116,9 @@ class Engine:
         )
 
         self.results_by_request[command.client_request_id] = result
-        return deepcopy(result)  
+        return deepcopy(result)
 
-    def snapshot(self, view_type: str, user_id: Optional[str] = None) -> Any:
-        """ read only view of engine's state"""
+    def snapshot(self, view_type: str, user_id: str | None = None) -> Any:
         if view_type == "TRADES":
             return list(self.trades)
         elif view_type == "PORTFOLIO":
@@ -140,23 +137,22 @@ class Engine:
         return None
 
     def _book_for(self, symbol: str) -> Book:
-        """to get the symbol of company/firm ."""
         if symbol not in self.books:
             self.books[symbol] = Book(symbol)
         return self.books[symbol]
 
-    def _execute_fill(self,*,symbol:str,price:int, qty:int,
-                      buy_order:Order, sell_order:Order,) -> None:
-        """ execute trade"""
+    def _execute_fill(
+        self, *, symbol: str, price: int, qty: int, buy_order: Order, sell_order: Order
+    ) -> None:
         buyer = self.users[buy_order.user_id]
         seller = self.users[sell_order.user_id]
-        cost = price*qty
+        cost = price * qty
 
         buyer.cash -= cost
-        buyer.shares[symbol] = buyer.shares.get(symbol,0)+qty
+        buyer.shares[symbol] = buyer.shares.get(symbol, 0) + qty
 
         seller.cash += cost
-        seller.shares[symbol] = seller.shares.get(symbol,0)-qty
+        seller.shares[symbol] = seller.shares.get(symbol, 0) - qty
 
         buy_order.remaining_qty -= qty
         sell_order.remaining_qty -= qty
@@ -178,4 +174,3 @@ class Engine:
         book = self._book_for(symbol)
         book.remove_if_done(buy_order)
         book.remove_if_done(sell_order)
-
