@@ -1,0 +1,7 @@
+{
+  "users": [
+    {"user_id": "bob", "password": "bob", "cash": 0, "shares": {"AAPL": 10}},
+    {"user_id": "alice", "password": "alice", "cash": 10000, "shares": {}},
+    {"user_id": "carol", "password": "carol", "cash": 5000, "shares": {"TSLA": 20}}
+  ]
+}

@@ -36,23 +36,69 @@ cd "/Users/vedpahune/Downloads/luckystonks-main 2"
 ./scripts/run_vllm.sh Qwen/Qwen3-0.6B
 ```
 
-Leave that terminal running. In a second terminal, start Insight with the same
-model identifier and then start the repo's gRPC server:
+Leave that terminal running. In a second terminal, start the Trading service
+with the guide's seeded Alice and Bob accounts:
+
+```bash
+cd "/Users/vedpahune/Downloads/luckystonks-main 2"
+source .venv/bin/activate
+export PYTHONPATH=.
+export LUCKYSTONKS_TRADING_READ_TOKEN="local-insight-read-token"
+python scripts/run_single.py
+```
+
+In a third terminal, run the guide's Bob-sell then Alice-buy demo. It prints
+`RESTING`, then `FILLED`, and creates one AAPL trade:
+
+```bash
+cd "/Users/vedpahune/Downloads/luckystonks-main 2"
+source .venv/bin/activate
+export PYTHONPATH=.
+python -m luckystonks.client.cli
+```
+
+You can also place your own order or inspect the current state:
+
+```bash
+python -m luckystonks.client.cli order carol carol SELL TSLA 250 5
+python -m luckystonks.client.cli view alice alice PORTFOLIO
+python -m luckystonks.client.cli view alice alice BOOK --symbol AAPL
+python -m luckystonks.client.cli view alice alice TRADES
+```
+
+To use your own starting accounts, set `LUCKYSTONKS_SEED_FILE` before starting
+Trading. The provided [data/seed_users.json](data/seed_users.json) is an example.
+It loads users, cash, and share ownership only; all trades must still be made
+through the matching engine.
+
+```bash
+export LUCKYSTONKS_SEED_FILE="$(pwd)/data/seed_users.json"
+python scripts/run_single.py
+```
+
+In a fourth terminal, start Insight with the same model identifier and read-only
+Trading token:
 
 ```bash
 cd "/Users/vedpahune/Downloads/luckystonks-main 2"
 source .venv/bin/activate
 export PYTHONPATH=.
 export LUCKYSTONKS_VLLM_MODEL="Qwen/Qwen3-0.6B"
+export LUCKYSTONKS_TRADING_READ_TOKEN="local-insight-read-token"
 python scripts/run_llm.py
 ```
 
 `LUCKYSTONKS_VLLM_MODEL` must exactly match the model supplied to `vllm serve`.
-If the model, vLLM, or trading server is unavailable, Insight stays up and
-returns a clearly labelled deterministic trade-tape fallback. If your Trading
-server requires authentication for `Get TRADES`, also set
-`LUCKYSTONKS_TRADING_READ_TOKEN` to its read-only service token before starting
-Insight.
+If the model, vLLM, or Trading service is unavailable, Insight stays up and
+returns a deterministic fallback. Set `LUCKYSTONKS_TRADING_READ_TOKEN` to a
+different shared value in both services before starting them if needed.
+
+The launcher uses an 8,192-token context limit, suitable for this laptop's
+available memory. Override it only when sufficient memory is available:
+
+```bash
+export LUCKYSTONKS_VLLM_MAX_MODEL_LEN=4096
+```
 
 ## Quick setup
 
@@ -65,6 +111,7 @@ chmod +x scripts/gen_proto.sh
 ./scripts/gen_proto.sh
 export PYTHONPATH=.
 python -c "from luckystonks.matching.engine import Engine; print('ok')"
+pytest -q
 ```
 
 # License
