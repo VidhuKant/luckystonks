@@ -1,5 +1,3 @@
-"""Read-only Insight gRPC service backed by a local vLLM endpoint."""
-
 from __future__ import annotations
 
 import json

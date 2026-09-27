@@ -5,6 +5,9 @@ from __future__ import annotations
 
 
 def main() -> None:
+
+    from luckystonks.env_loader import load_project_env
+    load_project_env()
     from luckystonks.node.server import serve
 
     serve()

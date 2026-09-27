@@ -9,6 +9,10 @@ from __future__ import annotations
 
 def main() -> None:
     """Start Insight gRPC via luckystonks.llm.assistant.main (stub)."""
+
+    from luckystonks.env_loader import load_project_env
+    load_project_env()
+
     from luckystonks.llm.assistant import main as serve_insight
 
     serve_insight()
