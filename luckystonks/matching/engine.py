@@ -71,12 +71,16 @@ class Engine:
         # if user is a seller
         if command.side == "SELL":
 
-            if user.shares.get(command.symbol,0)< command.qty:
-                result = Result(status="REJECTED",message="You don't have enough shares to sell")
+            owned = user.shares.get(command.symbol, 0)
+            already_listed = self._resting_sell_qty(command.user_id, command.symbol)
+            if owned - already_listed < command.qty:
+                result = Result(status="REJECTED", message="You don't have enough shares to sell")
                 self.results_by_request[command.client_request_id] = result
                 return deepcopy(result)
+            
         elif command.side == "BUY":
-            if user.cash < command.price*command.qty:
+            free_cash = user.cash - self._resting_buy_cash_reserved(command.user_id)
+            if free_cash < command.price * command.qty:
                 result = Result(status="REJECTED", message="You don't have enough cash to buy")
                 self.results_by_request[command.client_request_id] = result
                 return deepcopy(result)
@@ -197,6 +201,23 @@ class Engine:
         if symbol not in self.books:
             self.books[symbol] = Book(symbol)
         return self.books[symbol]
+
+    def _resting_sell_qty(self, user_id: str, symbol: str) -> int:
+        book = self.books.get(symbol)
+        if book is None:
+            return 0
+        return sum(
+            order.remaining_qty
+            for order in book.asks
+            if order.user_id == user_id
+        )
+    def _resting_buy_cash_reserved(self, user_id: str) -> int:
+        reserved = 0
+        for book in self.books.values():
+            for order in book.bids:
+                if order.user_id == user_id:
+                    reserved += order.remaining_qty * order.price
+        return reserved
 
     def _execute_fill(self,*,symbol:str,price:int, qty:int,
                       buy_order:Order, sell_order:Order,) -> None:

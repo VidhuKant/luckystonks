@@ -36,6 +36,18 @@ def test_idempotent_client_request_id() -> None:
     assert len(engine.books["AAPL"].asks) == 1
     assert len(engine.trades) == 0
 
+def test_reject_second_resting_sell_when_shares_already_listed() -> None:
+    engine = Engine()
+    engine.seed_demo_users()
+
+    first = engine.apply(Command("sell-1", "bob", "SELL", "AAPL", 150, 10))
+    assert first.status == "RESTING"
+    assert len(engine.books["AAPL"].asks) == 1
+
+    second = engine.apply(Command("sell-2", "bob", "SELL", "AAPL", 150, 10))
+    assert second.status == "REJECTED"
+    assert len(engine.books["AAPL"].asks) == 1
+    assert len(engine.trades) == 0
 
 def test_load_seed_data_and_read_views(tmp_path) -> None:
     seed_file = tmp_path / "seed.json"
