@@ -19,6 +19,8 @@ class Engine:
         self._next_trade_id: int = 1
         self._next_seq: int = 1
         self.results_by_request: Dict[str, Result] = {}
+        self.state_path: Path | None = None
+
 
     def seed_demo_users(self) -> None:
         seed_path = Path(__file__).resolve().parent.parent.parent / "data" / "seed_users.json"
@@ -60,6 +62,145 @@ class Engine:
 
         self.users = loaded_users
 
+    def set_state_path(self, path: str | Path | None) -> None:
+        self.state_path = Path(path) if path else None
+
+    def _persist(self) -> None:
+        if self.state_path is not None:
+            self.save_state(self.state_path)
+
+    def _store_result(self, client_request_id: str, result: Result) -> Result:
+        self.results_by_request[client_request_id] = result
+        self._persist()
+        return deepcopy(result)
+
+    @staticmethod
+    def _order_to_dict(order: Order) -> dict[str, Any]:
+        return {
+            "order_id": order.order_id,
+            "user_id": order.user_id,
+            "client_request_id": order.client_request_id,
+            "side": order.side,
+            "symbol": order.symbol,
+            "price": order.price,
+            "qty": order.qty,
+            "remaining_qty": order.remaining_qty,
+            "seq": order.seq,
+        }
+
+    @staticmethod
+    def _order_from_dict(data: dict[str, Any]) -> Order:
+        return Order(
+            order_id=int(data["order_id"]),
+            user_id=str(data["user_id"]),
+            client_request_id=str(data["client_request_id"]),
+            side=data["side"],
+            symbol=str(data["symbol"]),
+            price=int(data["price"]),
+            qty=int(data["qty"]),
+            remaining_qty=int(data["remaining_qty"]),
+            seq=int(data["seq"]),
+        )
+
+    def save_state(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        books_payload: dict[str, Any] = {}
+        for symbol, book in self.books.items():
+            books_payload[symbol] = {
+                "bids": [self._order_to_dict(o) for o in book.bids],
+                "asks": [self._order_to_dict(o) for o in book.asks],
+            }
+        users_payload = {
+            uid: {
+                "user_id": u.user_id,
+                "password": u.password,
+                "cash": u.cash,
+                "shares": dict(u.shares),
+                "role": u.role,
+            }
+            for uid, u in self.users.items()
+        }
+        trades_payload = [
+            {
+                "trade_id": t.trade_id,
+                "symbol": t.symbol,
+                "price": t.price,
+                "qty": t.qty,
+                "buy_order_id": t.buy_order_id,
+                "sell_order_id": t.sell_order_id,
+                "buyer_id": t.buyer_id,
+                "seller_id": t.seller_id,
+            }
+            for t in self.trades
+        ]
+        results_payload = {
+            cid: {
+                "status": r.status,
+                "order_id": r.order_id,
+                "filled_qty": r.filled_qty,
+                "message": r.message,
+            }
+            for cid, r in self.results_by_request.items()
+        }
+        payload = {
+            "version": 1,
+            "_next_order_id": self._next_order_id,
+            "_next_trade_id": self._next_trade_id,
+            "_next_seq": self._next_seq,
+            "users": users_payload,
+            "books": books_payload,
+            "trades": trades_payload,
+            "results_by_request": results_payload,
+        }
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def load_state(self, path: str | Path) -> None:
+        path = Path(path)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("version") != 1:
+            raise ValueError("unsupported state file version")
+        self._next_order_id = int(payload["_next_order_id"])
+        self._next_trade_id = int(payload["_next_trade_id"])
+        self._next_seq = int(payload["_next_seq"])
+        self.users = {}
+        for uid, data in payload["users"].items():
+            self.users[uid] = User(
+                user_id=data["user_id"],
+                password=data["password"],
+                cash=int(data["cash"]),
+                shares=dict(data["shares"]),
+                role=data.get("role", "user"),
+            )
+        self.books = {}
+        for symbol, book_data in payload.get("books", {}).items():
+            book = Book(symbol=symbol)
+            book.bids = [self._order_from_dict(o) for o in book_data.get("bids", [])]
+            book.asks = [self._order_from_dict(o) for o in book_data.get("asks", [])]
+            self.books[symbol] = book
+        self.trades = [
+            Trade(
+                trade_id=int(t["trade_id"]),
+                symbol=t["symbol"],
+                price=int(t["price"]),
+                qty=int(t["qty"]),
+                buy_order_id=int(t["buy_order_id"]),
+                sell_order_id=int(t["sell_order_id"]),
+                buyer_id=t["buyer_id"],
+                seller_id=t["seller_id"],
+            )
+            for t in payload.get("trades", [])
+        ]
+        self.results_by_request = {}
+        for cid, data in payload.get("results_by_request", {}).items():
+            self.results_by_request[cid] = Result(
+                status=data["status"],
+                order_id=data.get("order_id"),
+                filled_qty=int(data.get("filled_qty", 0)),
+                message=data.get("message", ""),
+            )
+
+
     def apply(self, command: Command) -> Result:
         """validate order and then send for further processing """
         if command.client_request_id in self.results_by_request:
@@ -67,14 +208,13 @@ class Engine:
 
         if command.price <= 0 or command.qty <= 0 or not command.symbol:
             result = Result(status="REJECTED", message="price, quantity, and symbol must be valid")
-            self.results_by_request[command.client_request_id] = result
-            return deepcopy(result)
+            # self.results_by_request[command.client_request_id] = result
+            return self._store_result(command.client_request_id, result)
 
         user = self.users.get(command.user_id)
         if user is None:
             result = Result(status="REJECTED", message="User not found")
-            self.results_by_request[command.client_request_id] = result
-            return deepcopy(result)
+            return self._store_result(command.client_request_id, result)
 
         # if user is a seller
         if command.side == "SELL":
@@ -83,19 +223,16 @@ class Engine:
             already_listed = self._resting_sell_qty(command.user_id, command.symbol)
             if owned - already_listed < command.qty:
                 result = Result(status="REJECTED", message="You don't have enough shares to sell")
-                self.results_by_request[command.client_request_id] = result
-                return deepcopy(result)
+                return self._store_result(command.client_request_id, result)
             
         elif command.side == "BUY":
             free_cash = user.cash - self._resting_buy_cash_reserved(command.user_id)
             if free_cash < command.price * command.qty:
                 result = Result(status="REJECTED", message="You don't have enough cash to buy")
-                self.results_by_request[command.client_request_id] = result
-                return deepcopy(result)
+                return self._store_result(command.client_request_id, result)
         else:
             result = Result(status="REJECTED", message="Invalid side")
-            self.results_by_request[command.client_request_id] = result
-            return deepcopy(result)
+            return self._store_result(command.client_request_id, result)
 
         order = Order(
             order_id=self._next_order_id,
@@ -163,8 +300,7 @@ class Engine:
             message=msg,
         )
 
-        self.results_by_request[command.client_request_id] = result
-        return deepcopy(result)
+        return self._store_result(command.client_request_id, result)
 
     def snapshot(self, view_type: str, user_id: Optional[str] = None, params: str = "") -> Any:
         """ read only view of engine's state"""

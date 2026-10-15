@@ -6,3 +6,5 @@ __pycache__/
 *.egg-info/
 DOCS.md
 .env
+PROJECT_GUIDE.md
+data/runtime/

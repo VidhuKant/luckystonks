@@ -72,3 +72,20 @@ def test_load_seed_data_and_read_views(tmp_path) -> None:
     assert engine.snapshot("ORDERS", "carol") == [
         {"order_id": 1, "side": "SELL", "symbol": "TSLA", "price": 250, "qty": 5, "remaining_qty": 5}
     ]
+
+
+
+def test_save_and_load_state_preserves_trades(tmp_path):
+    state_file = tmp_path / "state.json"
+    engine = Engine()
+    engine.seed_demo_users()
+    engine.apply(Command("r1", "ved", "SELL", "RELIANCE", 2450, 10))
+    engine.apply(Command("r2", "pratham", "BUY", "RELIANCE", 2450, 10))
+    engine.set_state_path(state_file)
+    engine.save_state(state_file)
+
+    restored = Engine()
+    restored.load_state(state_file)
+    assert len(restored.trades) == 1
+    assert restored.users["pratham"].shares.get("RELIANCE") == 10
+    assert restored.users["ved"].shares.get("RELIANCE") == 5

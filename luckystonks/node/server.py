@@ -13,13 +13,19 @@ HOST = "0.0.0.0"
 PORT = "50051"
 INSIGHT_READ_TOKEN = os.getenv("LUCKYSTONKS_TRADING_READ_TOKEN", "local-insight-read-token")
 _DEFAULT_SEED = Path(__file__).resolve().parent.parent.parent / "data" / "seed_users.json"
+_DEFAULT_STATE = Path(__file__).resolve().parent.parent.parent / "data" / "runtime" / "state.json"
 SEED_FILE = os.getenv("LUCKYSTONKS_SEED_FILE", str(_DEFAULT_SEED))
+STATE_FILE = os.getenv("LUCKYSTONKS_STATE_FILE", str(_DEFAULT_STATE))
 
 def serve(engine: Engine | None = None) -> None:
     engine = engine or Engine()
-    if not engine.users:
+    state_path = Path(STATE_FILE)
+    engine.set_state_path(state_path)
+    if state_path.is_file():
+        engine.load_state(state_path)
+    elif not engine.users:
         engine.load_seed_data(SEED_FILE)
-
+        engine._persist()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
 
     bound_port = server.add_insecure_port(f"{HOST}:{PORT}")
