@@ -21,8 +21,8 @@ class Engine:
         self.results_by_request: Dict[str, Result] = {}
 
     def seed_demo_users(self) -> None:
-        self.users["bob"] = User("bob", "bob", cash=0, shares={"AAPL": 10})
-        self.users["alice"] = User("alice", "alice", cash=10_000, shares={})
+        seed_path = Path(__file__).resolve().parent.parent.parent / "data" / "seed_users.json"
+        self.load_seed_data(seed_path)
 
     def load_seed_data(self, path: str | Path) -> None:
         """Load initial user accounts from a JSON seed file."""
@@ -31,6 +31,8 @@ class Engine:
         users = payload.get("users")
         if not isinstance(users, list) or not users:
             raise ValueError("seed data must contain a non-empty users list")
+
+        
 
         loaded_users: Dict[str, User] = {}
         for record in users:
@@ -49,7 +51,13 @@ class Engine:
                 for symbol, qty in shares.items()
             ):
                 raise ValueError("seed shares must map symbols to non-negative integers")
-            loaded_users[user_id] = User(user_id, password, cash, dict(shares))
+            # loaded_users[user_id] = User(user_id, password, cash, dict(shares))
+
+            role = record.get("role","user")
+            if role not in ("user","admin"):
+                raise ValueError("user role must be 'user' or 'admin'")
+            loaded_users[user_id] = User(user_id, password, cash, dict(shares), role=role)
+
         self.users = loaded_users
 
     def apply(self, command: Command) -> Result:
@@ -182,6 +190,16 @@ class Engine:
                 for book in self.books.values()
                 for order in [*book.bids, *book.asks]
                 if order.user_id == user_id
+            ]
+        elif view_type == "ADMIN_PORTFOLIOS":
+            return [
+                {
+                    "user_id": uid,
+                    "cash": user.cash,
+                    "shares": dict(user.shares),
+                    "role": user.role,
+                }
+                for uid, user in sorted(self.users.items())
             ]
         return None
 

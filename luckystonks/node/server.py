@@ -1,5 +1,6 @@
 from concurrent import futures
 import os
+from pathlib import Path
 
 import grpc
 
@@ -11,15 +12,13 @@ from .servicer import LuckyStonksServicer
 HOST = "0.0.0.0"
 PORT = "50051"
 INSIGHT_READ_TOKEN = os.getenv("LUCKYSTONKS_TRADING_READ_TOKEN", "local-insight-read-token")
-SEED_FILE = os.getenv("LUCKYSTONKS_SEED_FILE", "")
+_DEFAULT_SEED = Path(__file__).resolve().parent.parent.parent / "data" / "seed_users.json"
+SEED_FILE = os.getenv("LUCKYSTONKS_SEED_FILE", str(_DEFAULT_SEED))
 
 def serve(engine: Engine | None = None) -> None:
     engine = engine or Engine()
     if not engine.users:
-        if SEED_FILE:
-            engine.load_seed_data(SEED_FILE)
-        else:
-            engine.seed_demo_users()
+        engine.load_seed_data(SEED_FILE)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
 

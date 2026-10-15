@@ -5,6 +5,7 @@ package luckystonks;
 // Shared menu for the trading gRPC server (Login, Post, Get).
 service Trading {
   rpc Login(LoginRequest) returns (LoginReply);
+  rpc Logout(LogoutRequest) returns (LogoutReply);
   rpc Post(PostRequest) returns (PostReply);
   rpc Get(GetRequest) returns (GetReply);
 }
@@ -17,6 +18,15 @@ message LoginRequest {
 message LoginReply {
   string status = 1;
   string token = 2;
+  string role = 3;
+}
+
+message LogoutRequest{
+  string token = 1;
+}
+
+message LogoutReply{
+  string status = 1;
 }
 
 message PostRequest {

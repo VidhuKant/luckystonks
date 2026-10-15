@@ -10,6 +10,7 @@ class User:
     password: str = ""
     cash: int = 0
     shares: dict[str, int] = field(default_factory=dict)
+    role: str = "user"
 
 
 @dataclass

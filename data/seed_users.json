@@ -1,7 +1,29 @@
 {
   "users": [
-    {"user_id": "bob", "password": "bob", "cash": 0, "shares": {"AAPL": 10}},
-    {"user_id": "alice", "password": "alice", "cash": 10000, "shares": {}},
-    {"user_id": "carol", "password": "carol", "cash": 5000, "shares": {"TSLA": 20}}
+    {
+      "user_id": "ved",
+      "password": "ved",
+      "cash": 500000,
+      "shares": {"RELIANCE": 15, "TCS": 8, "HDFCBANK": 20}
+    },
+    {
+      "user_id": "pratham",
+      "password": "pratham",
+      "cash": 500000,
+      "shares": {"INFY": 25, "WIPRO": 30, "TATAMOTORS": 50}
+    },
+    {
+      "user_id": "vidhu",
+      "password": "vidhu",
+      "cash": 500000,
+      "shares": {"BHARTIARTL": 40, "ITC": 100, "SBIN": 60}
+    },
+    {
+      "user_id": "admin",
+      "password": "admin",
+      "cash": 500000,
+      "shares": {},
+      "role": "admin"
+    }
   ]
 }

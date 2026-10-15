@@ -16,8 +16,8 @@ class LocalTradingStub:
 def test_seeded_trade_is_available_to_insight(monkeypatch):
     engine = Engine()
     engine.seed_demo_users()
-    assert engine.apply(Command("bob-sell", "bob", "SELL", "AAPL", 150, 10)).status == "RESTING"
-    assert engine.apply(Command("alice-buy", "alice", "BUY", "AAPL", 150, 10)).status == "FILLED"
+    assert engine.apply(Command("ved-sell", "ved", "SELL", "RELIANCE", 2450, 10)).status == "RESTING"
+    assert engine.apply(Command("pratham-buy", "pratham", "BUY", "RELIANCE", 2450, 10)).status == "FILLED"
     servicer = LuckyStonksServicer(engine, insight_read_token="insight-token")
     monkeypatch.setattr(assistant, "TRADING_READ_TOKEN", "insight-token")
 
@@ -27,14 +27,14 @@ def test_seeded_trade_is_available_to_insight(monkeypatch):
     assert tape == [
         {
             "trade_id": 1,
-            "symbol": "AAPL",
-            "price": 150,
+            "symbol": "RELIANCE",
+            "price": 2450,
             "qty": 10,
             "buy_order_id": 2,
             "sell_order_id": 1,
-            "buyer_id": "alice",
-            "seller_id": "bob",
+            "buyer_id": "pratham",
+            "seller_id": "ved",
         }
     ]
     assert "No live trades" not in answer
-    assert "AAPL: 10 shares at 150" in answer
+    assert "RELIANCE: 10 shares at 2450" in answer

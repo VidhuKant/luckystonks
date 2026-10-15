@@ -5,6 +5,7 @@ from dataclasses import asdict, is_dataclass
 from luckystonks.matching.models import Command
 from luckystonks.pb import trading_pb2, trading_pb2_grpc
 
+ADMIN_GET_TYPES = frozenset({"ADMIN_PORTFOLIOS"})
 
 class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
     def __init__(self, engine, insight_read_token: str):
@@ -16,14 +17,20 @@ class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
         user = self.engine.users.get(request.username)
 
         if user is None:
-            return trading_pb2.LoginReply(status="ERR", token="")
+            return trading_pb2.LoginReply(status="ERR", token="",role="")
 
         if user.password != request.password:
-            return trading_pb2.LoginReply(status="ERR", token="")
+            return trading_pb2.LoginReply(status="ERR", token="",role="")
 
         token = str(uuid.uuid4())
         self.sessions[token] = user.user_id
-        return trading_pb2.LoginReply(status="OK", token=token)
+        return trading_pb2.LoginReply(status="OK", token=token, role= user.role)
+
+    def Logout(self, request, context):
+        if request.token in self.sessions:
+            del self.sessions[request.token]
+            return trading_pb2.LogoutReply(status="OK")
+        return trading_pb2.LogoutReply(status="ERR")
 
     def Post(self, request, context):
         user_id = self.sessions.get(request.token)
@@ -43,10 +50,17 @@ class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
         if request.token == self.insight_read_token and request.type == "TRADES":
             data = self.engine.snapshot("TRADES")
         elif user_id is not None:
+            if request.type in ADMIN_GET_TYPES and not self._is_admin(user_id):
+                return trading_pb2.GetReply(status="ERR")
             data = self.engine.snapshot(request.type, user_id, request.params)
         else:
             return trading_pb2.GetReply(status="ERR")
         return self._make_get_reply(data)
+
+    def _is_admin(self, user_id: str)-> bool:
+        user= self.engine.users.get(user_id)
+        return user is not None and user.role =="admin"
+    
 
     def _parse_order(self, user_id, request):
         if request.type != "ORDER":

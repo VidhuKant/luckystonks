@@ -11,6 +11,10 @@ class LocalTradingStub:
         assert timeout == 5
         return self.servicer.Login(request, context=None)
 
+    def Logout(self, request, timeout):
+        assert timeout == 5
+        return self.servicer.Logout(request, context=None)
+
     def Post(self, request, timeout):
         assert timeout == 5
         return self.servicer.Post(request, context=None)
@@ -30,12 +34,12 @@ def test_run_demo_shows_resting_then_filled_trade():
     assert trades == [
         {
             "trade_id": 1,
-            "symbol": "AAPL",
-            "price": 150,
+            "symbol": "RELIANCE",
+            "price": 2450,
             "qty": 10,
             "buy_order_id": 2,
             "sell_order_id": 1,
-            "buyer_id": "alice",
-            "seller_id": "bob",
+            "buyer_id": "pratham",
+            "seller_id": "ved",
         }
     ]
