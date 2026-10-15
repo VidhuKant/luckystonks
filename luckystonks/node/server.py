@@ -33,7 +33,8 @@ def serve(engine: Engine | None = None) -> None:
         raise RuntimeError(f"could not bind Trading server to {HOST}:{PORT}")
 
     trading_pb2_grpc.add_TradingServicer_to_server(
-        LuckyStonksServicer(engine, insight_read_token=INSIGHT_READ_TOKEN), server
+        LuckyStonksServicer(engine, insight_read_token=INSIGHT_READ_TOKEN, seed_file=SEED_FILE),
+        server,
     )
 
     server.start()

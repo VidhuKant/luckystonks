@@ -229,6 +229,17 @@ class Engine:
         self.order_log = list(payload.get("order_log", []))
         self._next_log_id = int(payload.get("_next_log_id", len(self.order_log) + 1))
 
+    def reset_from_seed(self, path: str | Path) -> None:
+        self.books.clear()
+        self.trades.clear()
+        self.results_by_request.clear()
+        self.order_log.clear()
+        self._next_order_id = 1
+        self._next_trade_id = 1
+        self._next_seq = 1
+        self._next_log_id = 1
+        self.load_seed_data(path)
+        self._persist()
 
     def apply(self, command: Command) -> Result:
         """validate order and then send for further processing """

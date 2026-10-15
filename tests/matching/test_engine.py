@@ -115,3 +115,31 @@ def test_order_log_survives_save_and_load(tmp_path) -> None:
     restored.load_state(state_file)
     assert len(restored.order_log) == 1
     assert restored.order_log[0]["user_id"] == "ved"
+
+
+def test_reset_from_seed_clears_market(tmp_path) -> None:
+    seed_file = tmp_path / "seed.json"
+    seed_file.write_text(
+        json.dumps(
+            {
+                "users": [
+                    {"user_id": "u1", "password": "p", "cash": 1000, "shares": {"X": 5}},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    engine = Engine()
+    engine.load_seed_data(seed_file)
+    engine.apply(Command("s1", "u1", "SELL", "X", 100, 2))
+    assert not engine.trades
+    assert engine.books["X"].asks
+    assert engine.order_log
+
+    engine.reset_from_seed(seed_file)
+    assert engine.trades == []
+    assert engine.books == {}
+    assert engine.order_log == []
+    assert engine.results_by_request == {}
+    assert engine.users["u1"].shares["X"] == 5
+    assert engine._next_order_id == 1

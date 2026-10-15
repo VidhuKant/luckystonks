@@ -130,6 +130,7 @@ def run_interactive(stub: Any) -> None:
             if session.role == "admin":
                 print("6) [Admin] All users' portfolios")
                 print("7) [Admin] Order log")
+                print("8) [Admin] Reset market to seed")
             print("L) Logout")
             print("Q) Quit program")
             choice = input("Choice: ").strip().lower()
@@ -157,6 +158,13 @@ def run_interactive(stub: Any) -> None:
                     _print_json(get(stub, session.token, "ADMIN_PORTFOLIOS"))
                 elif choice == "7" and session.role == "admin":
                     _print_json(get(stub, session.token, "ORDER_LOG"))
+                elif choice == "8" and session.role == "admin":
+                    confirm = input("Type YES to reset entire market: ").strip()
+                    if confirm == "YES":
+                        status, detail = post(stub, session.token, "ADMIN_RESET", b"{}")
+                        _print_json({"status": status, "detail": detail})
+                        print("All sessions cleared. Log in again.")
+                        break
                 elif choice == "l":
                     logout(stub, session.token)
                     print("Logged out.")

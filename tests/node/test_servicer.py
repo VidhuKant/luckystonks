@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from luckystonks.matching.engine import Engine
 from luckystonks.matching.models import Command
@@ -90,3 +91,44 @@ def test_admin_can_read_order_log_non_admin_denied():
     assert ok.status == "OK"
     assert len(ok.items) == 1
     assert json.loads(ok.items[0].data)["status"] == "RESTING"
+
+
+_SEED = Path(__file__).resolve().parents[2] / "data" / "seed_users.json"
+
+
+def test_admin_reset_clears_trades_and_sessions():
+    engine = Engine()
+    engine.seed_demo_users()
+    engine.apply(Command("ved-sell", "ved", "SELL", "RELIANCE", 2450, 10))
+    engine.apply(Command("pratham-buy", "pratham", "BUY", "RELIANCE", 2450, 10))
+    assert len(engine.trades) == 1
+
+    servicer = LuckyStonksServicer(engine, insight_read_token="insight-token", seed_file=str(_SEED))
+    admin = servicer.Login(trading_pb2.LoginRequest(username="admin", password="admin"), context=None)
+    ved = servicer.Login(trading_pb2.LoginRequest(username="ved", password="ved"), context=None)
+
+    reply = servicer.Post(
+        trading_pb2.PostRequest(token=admin.token, type="ADMIN_RESET", data=b"{}"),
+        context=None,
+    )
+    assert reply.status == "OK"
+    assert len(engine.trades) == 0
+    assert engine.order_log == []
+    assert ved.token not in servicer.sessions
+
+    denied = servicer.Get(trading_pb2.GetRequest(token=ved.token, type="PORTFOLIO"), context=None)
+    assert denied.status == "ERR"
+
+
+def test_admin_reset_denied_for_non_admin():
+    engine = Engine()
+    engine.seed_demo_users()
+    servicer = LuckyStonksServicer(engine, insight_read_token="insight-token", seed_file=str(_SEED))
+    ved = servicer.Login(trading_pb2.LoginRequest(username="ved", password="ved"), context=None)
+
+    reply = servicer.Post(
+        trading_pb2.PostRequest(token=ved.token, type="ADMIN_RESET", data=b"{}"),
+        context=None,
+    )
+    assert reply.status == "ERR"
+    assert reply.detail == "admin only"
