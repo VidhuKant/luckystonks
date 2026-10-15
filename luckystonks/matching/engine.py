@@ -20,6 +20,8 @@ class Engine:
         self._next_seq: int = 1
         self.results_by_request: Dict[str, Result] = {}
         self.state_path: Path | None = None
+        self.order_log: List[Dict[str, Any]] = []
+        self._next_log_id: int = 1
 
 
     def seed_demo_users(self) -> None:
@@ -69,10 +71,33 @@ class Engine:
         if self.state_path is not None:
             self.save_state(self.state_path)
 
-    def _store_result(self, client_request_id: str, result: Result) -> Result:
+    def _append_order_log(self, command: Command, result: Result) -> None:
+        self.order_log.append(
+            {
+                "log_id": self._next_log_id,
+                "user_id": command.user_id,
+                "client_request_id": command.client_request_id,
+                "side": command.side,
+                "symbol": command.symbol,
+                "price": command.price,
+                "qty": command.qty,
+                "status": result.status,
+                "order_id": result.order_id,
+                "filled_qty": result.filled_qty,
+                "message": result.message,
+            }
+        )
+        self._next_log_id += 1
+
+    def _store_result(
+        self, client_request_id: str, result: Result, command: Command | None = None
+    ) -> Result:
         self.results_by_request[client_request_id] = result
+        if command is not None:
+            self._append_order_log(command, result)
         self._persist()
         return deepcopy(result)
+
 
     @staticmethod
     def _order_to_dict(order: Order) -> dict[str, Any]:
@@ -148,10 +173,12 @@ class Engine:
             "_next_order_id": self._next_order_id,
             "_next_trade_id": self._next_trade_id,
             "_next_seq": self._next_seq,
+            "_next_log_id": self._next_log_id,
             "users": users_payload,
             "books": books_payload,
             "trades": trades_payload,
             "results_by_request": results_payload,
+            "order_log": self.order_log,
         }
         path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -199,6 +226,8 @@ class Engine:
                 filled_qty=int(data.get("filled_qty", 0)),
                 message=data.get("message", ""),
             )
+        self.order_log = list(payload.get("order_log", []))
+        self._next_log_id = int(payload.get("_next_log_id", len(self.order_log) + 1))
 
 
     def apply(self, command: Command) -> Result:
@@ -208,13 +237,12 @@ class Engine:
 
         if command.price <= 0 or command.qty <= 0 or not command.symbol:
             result = Result(status="REJECTED", message="price, quantity, and symbol must be valid")
-            # self.results_by_request[command.client_request_id] = result
-            return self._store_result(command.client_request_id, result)
+            return self._store_result(command.client_request_id, result, command)
 
         user = self.users.get(command.user_id)
         if user is None:
             result = Result(status="REJECTED", message="User not found")
-            return self._store_result(command.client_request_id, result)
+            return self._store_result(command.client_request_id, result, command)
 
         # if user is a seller
         if command.side == "SELL":
@@ -223,16 +251,16 @@ class Engine:
             already_listed = self._resting_sell_qty(command.user_id, command.symbol)
             if owned - already_listed < command.qty:
                 result = Result(status="REJECTED", message="You don't have enough shares to sell")
-                return self._store_result(command.client_request_id, result)
-            
+                return self._store_result(command.client_request_id, result, command)
+
         elif command.side == "BUY":
             free_cash = user.cash - self._resting_buy_cash_reserved(command.user_id)
             if free_cash < command.price * command.qty:
                 result = Result(status="REJECTED", message="You don't have enough cash to buy")
-                return self._store_result(command.client_request_id, result)
+                return self._store_result(command.client_request_id, result, command)
         else:
             result = Result(status="REJECTED", message="Invalid side")
-            return self._store_result(command.client_request_id, result)
+            return self._store_result(command.client_request_id, result, command)
 
         order = Order(
             order_id=self._next_order_id,
@@ -300,7 +328,7 @@ class Engine:
             message=msg,
         )
 
-        return self._store_result(command.client_request_id, result)
+        return self._store_result(command.client_request_id, result, command)
 
     def snapshot(self, view_type: str, user_id: Optional[str] = None, params: str = "") -> Any:
         """ read only view of engine's state"""
@@ -337,6 +365,8 @@ class Engine:
                 }
                 for uid, user in sorted(self.users.items())
             ]
+        elif view_type == "ORDER_LOG":
+            return list(self.order_log)
         return None
 
     @staticmethod

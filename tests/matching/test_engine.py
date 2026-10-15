@@ -89,3 +89,29 @@ def test_save_and_load_state_preserves_trades(tmp_path):
     assert len(restored.trades) == 1
     assert restored.users["pratham"].shares.get("RELIANCE") == 10
     assert restored.users["ved"].shares.get("RELIANCE") == 5
+
+
+def test_order_log_records_each_new_apply() -> None:
+    engine = Engine()
+    engine.seed_demo_users()
+    engine.apply(Command("r1", "ved", "SELL", "RELIANCE", 2450, 10))
+    engine.apply(Command("r2", "pratham", "BUY", "RELIANCE", 2450, 10))
+    assert len(engine.order_log) == 2
+    assert engine.order_log[0]["status"] == "RESTING"
+    assert engine.order_log[1]["status"] == "FILLED"
+    assert engine.order_log[1]["filled_qty"] == 10
+    engine.apply(Command("r1", "ved", "SELL", "RELIANCE", 2450, 10))
+    assert len(engine.order_log) == 2
+
+
+def test_order_log_survives_save_and_load(tmp_path) -> None:
+    state_file = tmp_path / "state.json"
+    engine = Engine()
+    engine.seed_demo_users()
+    engine.apply(Command("r1", "ved", "SELL", "RELIANCE", 2450, 10))
+    engine.set_state_path(state_file)
+    engine.save_state(state_file)
+    restored = Engine()
+    restored.load_state(state_file)
+    assert len(restored.order_log) == 1
+    assert restored.order_log[0]["user_id"] == "ved"

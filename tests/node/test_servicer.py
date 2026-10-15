@@ -73,3 +73,20 @@ def test_admin_portfolios_requires_admin_role():
     ok = servicer.Get(trading_pb2.GetRequest(token=admin.token, type="ADMIN_PORTFOLIOS"), context=None)
     assert ok.status == "OK"
     assert len(ok.items) >= 4
+
+
+def test_admin_can_read_order_log_non_admin_denied():
+    engine = Engine()
+    engine.seed_demo_users()
+    engine.apply(Command("ved-sell", "ved", "SELL", "RELIANCE", 2450, 10))
+    servicer = LuckyStonksServicer(engine, insight_read_token="insight-token")
+
+    ved = servicer.Login(trading_pb2.LoginRequest(username="ved", password="ved"), context=None)
+    denied = servicer.Get(trading_pb2.GetRequest(token=ved.token, type="ORDER_LOG"), context=None)
+    assert denied.status == "ERR"
+
+    admin = servicer.Login(trading_pb2.LoginRequest(username="admin", password="admin"), context=None)
+    ok = servicer.Get(trading_pb2.GetRequest(token=admin.token, type="ORDER_LOG"), context=None)
+    assert ok.status == "OK"
+    assert len(ok.items) == 1
+    assert json.loads(ok.items[0].data)["status"] == "RESTING"

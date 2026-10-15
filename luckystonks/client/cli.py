@@ -129,6 +129,7 @@ def run_interactive(stub: Any) -> None:
             print("5) Place limit order")
             if session.role == "admin":
                 print("6) [Admin] All users' portfolios")
+                print("7) [Admin] Order log")
             print("L) Logout")
             print("Q) Quit program")
             choice = input("Choice: ").strip().lower()
@@ -154,6 +155,8 @@ def run_interactive(stub: Any) -> None:
                     _print_json({"status": status, "detail": detail})
                 elif choice == "6" and session.role == "admin":
                     _print_json(get(stub, session.token, "ADMIN_PORTFOLIOS"))
+                elif choice == "7" and session.role == "admin":
+                    _print_json(get(stub, session.token, "ORDER_LOG"))
                 elif choice == "l":
                     logout(stub, session.token)
                     print("Logged out.")
@@ -190,7 +193,10 @@ def main() -> None:
     view_parser = commands.add_parser("view")
     view_parser.add_argument("username")
     view_parser.add_argument("password")
-    view_parser.add_argument("type", choices=["TRADES", "PORTFOLIO", "BOOK", "ORDERS", "ADMIN_PORTFOLIOS"])
+    view_parser.add_argument(
+        "type",
+        choices=["TRADES", "PORTFOLIO", "BOOK", "ORDERS", "ADMIN_PORTFOLIOS", "ORDER_LOG"],
+    )
     view_parser.add_argument("--symbol", default="")
 
     args = parser.parse_args()

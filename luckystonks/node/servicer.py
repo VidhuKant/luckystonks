@@ -5,7 +5,7 @@ from dataclasses import asdict, is_dataclass
 from luckystonks.matching.models import Command
 from luckystonks.pb import trading_pb2, trading_pb2_grpc
 
-ADMIN_GET_TYPES = frozenset({"ADMIN_PORTFOLIOS"})
+ADMIN_GET_TYPES = frozenset({"ADMIN_PORTFOLIOS", "ORDER_LOG"})
 
 class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
     def __init__(self, engine, insight_read_token: str):
