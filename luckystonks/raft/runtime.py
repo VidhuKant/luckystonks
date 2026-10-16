@@ -11,6 +11,11 @@ from luckystonks.matching.models import Command
 from luckystonks.pb import raft_pb2
 
 from .codec import encode_admin_reset, encode_command
+from .leader_replicate import (
+    init_leader_tracking,
+    push_commit_to_followers,
+    replicate_entry,
+)
 from .log_entry import LogEntry
 from .peers import PeerRegistry
 
@@ -30,6 +35,8 @@ class RaftRuntime:
         self.heartbeat_interval = 0.1
         self.election_timeout_bounds = (0.25, 0.5)
         self.known_leader_id: int | None = None
+        self.next_index: dict[int, int] = {}
+        self.match_index: dict[int, int] = {}
 
     def reset_election_timer(self) -> None:
         self.election_deadline = time.monotonic() + random.uniform(*self.election_timeout_bounds)
@@ -68,91 +75,60 @@ class RaftRuntime:
                 return f"NOT_LEADER;trading={addr}"
         return "NOT_LEADER;trading=unknown"
 
+    def _follower_ids(self) -> list[int]:
+        return [pid for pid in self.peers.peer_ids() if pid != self.node.peer_id]
+
+    def _init_leader_tracking(self) -> None:
+        self.next_index, self.match_index = init_leader_tracking(self.node, self._follower_ids())
+
+    def _send_append_local(
+        self, pid: int, term: int, prev_index: int, prev_term: int, commit: int, entries: list[LogEntry]
+    ) -> dict[str, int | bool]:
+        reply = self._rpc_append_entries(
+            pid,
+            term=term,
+            prev_index=prev_index,
+            prev_term=prev_term,
+            leader_commit=commit,
+            entries=entries,
+        )
+        if reply is None:
+            return {"entry_appended": False, "match_index": 0, "term": term}
+        return {
+            "entry_appended": reply.entry_appended,
+            "match_index": int(reply.match_index),
+            "term": int(reply.term),
+        }
+
     def replicate_command(self, command: Command) -> bool:
         with self.lock:
             if self.node.role != "leader":
                 return False
-            term = self.node.current_term
-            prev_index = self.node.last_log_index()
-            prev_term = self.node.last_log_term()
-            entry = LogEntry(term, encode_command(command))
-            new_index = prev_index + 1
-            self.node.log.append(entry)
+            entry = LogEntry(self.node.current_term, encode_command(command))
+            followers = self._follower_ids()
 
-            successes = 1
-            for pid in self.peers.peer_ids():
-                if pid == self.node.peer_id:
-                    continue
-                reply = self._rpc_append_entries(
-                    pid,
-                    term=term,
-                    prev_index=prev_index,
-                    prev_term=prev_term,
-                    leader_commit=0,
-                    entries=[entry],
-                )
-                if reply is not None and reply.entry_appended:
-                    successes += 1
+            def send(pid, term, prev_index, prev_term, commit, entries):
+                return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
 
-            if successes <= len(self.peers.peer_ids()) // 2:
-                self.node.log.pop()
-                return False
-
-            for pid in self.peers.peer_ids():
-                self._rpc_append_entries(
-                    pid,
-                    term=term,
-                    prev_index=new_index,
-                    prev_term=term,
-                    leader_commit=new_index,
-                    entries=[],
-                )
-            self.node.commit_index = new_index
-            self.node._apply_committed()
-            return True
+            ok = replicate_entry(self.node, entry, followers, send, self.next_index, self.match_index)
+            if ok:
+                push_commit_to_followers(self.node, followers, send, self.next_index, self.match_index)
+            return ok
 
     def replicate_admin_reset(self, seed_path: str) -> bool:
         with self.lock:
             if self.node.role != "leader":
                 return False
-            term = self.node.current_term
-            prev_index = self.node.last_log_index()
-            prev_term = self.node.last_log_term()
-            entry = LogEntry(term, encode_admin_reset(seed_path))
-            new_index = prev_index + 1
-            self.node.log.append(entry)
+            entry = LogEntry(self.node.current_term, encode_admin_reset(seed_path))
+            followers = self._follower_ids()
 
-            successes = 1
-            for pid in self.peers.peer_ids():
-                if pid == self.node.peer_id:
-                    continue
-                reply = self._rpc_append_entries(
-                    pid,
-                    term=term,
-                    prev_index=prev_index,
-                    prev_term=prev_term,
-                    leader_commit=0,
-                    entries=[entry],
-                )
-                if reply is not None and reply.entry_appended:
-                    successes += 1
+            def send(pid, term, prev_index, prev_term, commit, entries):
+                return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
 
-            if successes <= len(self.peers.peer_ids()) // 2:
-                self.node.log.pop()
-                return False
-
-            for pid in self.peers.peer_ids():
-                self._rpc_append_entries(
-                    pid,
-                    term=term,
-                    prev_index=new_index,
-                    prev_term=term,
-                    leader_commit=new_index,
-                    entries=[],
-                )
-            self.node.commit_index = new_index
-            self.node._apply_committed()
-            return True
+            ok = replicate_entry(self.node, entry, followers, send, self.next_index, self.match_index)
+            if ok:
+                push_commit_to_followers(self.node, followers, send, self.next_index, self.match_index)
+            return ok
 
     def _loop(self) -> None:
         while self.running:
@@ -186,27 +162,21 @@ class RaftRuntime:
 
         if votes > len(self.peers.peer_ids()) // 2:
             self.node.become_leader()
+            self._init_leader_tracking()
             self.last_heartbeat_sent = 0.0
             self._send_heartbeats()
         else:
             self.reset_election_timer()
 
     def _send_heartbeats(self) -> None:
-        term = self.node.current_term
-        prev_index = self.node.last_log_index()
-        prev_term = self.node.last_log_term()
-        commit = self.node.commit_index
-        for pid in self.peers.peer_ids():
-            if pid == self.node.peer_id:
-                continue
-            self._rpc_append_entries(
-                pid,
-                term=term,
-                prev_index=prev_index,
-                prev_term=prev_term,
-                leader_commit=commit,
-                entries=[],
-            )
+        followers = self._follower_ids()
+        if not followers:
+            return
+
+        def send(pid, term, prev_index, prev_term, commit, entries):
+            return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
+
+        push_commit_to_followers(self.node, followers, send, self.next_index, self.match_index)
 
     def _rpc_request_vote(self, to_peer: int, term: int) -> raft_pb2.RequestVoteReply | None:
         try:

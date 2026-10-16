@@ -132,3 +132,32 @@ def test_admin_reset_denied_for_non_admin():
     )
     assert reply.status == "ERR"
     assert reply.detail == "admin only"
+
+
+def test_login_rejects_bad_password():
+    engine = Engine()
+    engine.seed_demo_users()
+    servicer = LuckyStonksServicer(engine, insight_read_token="insight-token")
+    reply = servicer.Login(
+        trading_pb2.LoginRequest(username="ved", password="wrong"), context=None
+    )
+    assert reply.status == "ERR"
+    assert reply.token == ""
+
+
+def test_get_requires_valid_session():
+    engine = Engine()
+    engine.seed_demo_users()
+    servicer = LuckyStonksServicer(engine, insight_read_token="insight-token")
+    denied = servicer.Get(trading_pb2.GetRequest(token="fake", type="PORTFOLIO"), context=None)
+    assert denied.status == "ERR"
+
+
+def test_insight_token_cannot_read_portfolio():
+    engine = Engine()
+    engine.seed_demo_users()
+    servicer = LuckyStonksServicer(engine, insight_read_token="insight-token")
+    denied = servicer.Get(
+        trading_pb2.GetRequest(token="insight-token", type="PORTFOLIO"), context=None
+    )
+    assert denied.status == "ERR"

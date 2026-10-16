@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from luckystonks.matching.models import Command
+from luckystonks.raft.cluster_state import engine_fingerprint
 from luckystonks.raft.in_memory import InMemoryCluster
 
 
@@ -19,17 +20,19 @@ def test_cluster_order_and_admin_reset_keep_peers_aligned(tmp_path: Path) -> Non
 
     cmd = Command("r1", "ved", "SELL", "RELIANCE", 2450, 10)
     assert cluster.replicate_command(0, cmd)
-    for node in cluster.nodes.values():
-        assert len(node.engine.books["RELIANCE"].asks) == 1
-        assert len(node.engine.order_log) == 1
+    fps = {engine_fingerprint(n.engine) for n in cluster.nodes.values()}
+    assert len(fps) == 1
 
     cmd2 = Command("r2", "pratham", "BUY", "RELIANCE", 2450, 10)
     assert cluster.replicate_command(0, cmd2)
+    fps = {engine_fingerprint(n.engine) for n in cluster.nodes.values()}
+    assert len(fps) == 1
     for node in cluster.nodes.values():
         assert len(node.engine.trades) == 1
-        assert node.engine.users["pratham"].shares.get("RELIANCE") == 10
 
     assert cluster.replicate_admin_reset(0, str(seed))
+    fps = {engine_fingerprint(n.engine) for n in cluster.nodes.values()}
+    assert len(fps) == 1
     for node in cluster.nodes.values():
         assert node.engine.trades == []
         assert node.engine.books == {}

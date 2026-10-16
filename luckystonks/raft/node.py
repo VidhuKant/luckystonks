@@ -110,9 +110,6 @@ class RaftNode:
             "match_index": match_index,
         }
 
-    def start(self) -> None:
-        raise NotImplementedError
-
     def request_vote(self, **kwargs: object) -> dict:
         return self.handle_request_vote(
             from_peer=int(kwargs["from_peer"]),
@@ -123,10 +120,22 @@ class RaftNode:
         )
 
     def append_entries(self, **kwargs: object) -> dict:
-        raise NotImplementedError
-
-    def submit_client_post(self, **kwargs: object) -> object:
-        raise NotImplementedError
+        raw_entries = kwargs.get("entries", [])
+        if not raw_entries:
+            entries: list[LogEntry] = []
+        elif isinstance(raw_entries[0], LogEntry):
+            entries = raw_entries
+        else:
+            entries = [LogEntry(int(e["term"]), e["command"]) for e in raw_entries]
+        return self.handle_append_entries(
+            from_peer=int(kwargs["from_peer"]),
+            to_peer=int(kwargs["to_peer"]),
+            term=int(kwargs["term"]),
+            prev_index=int(kwargs["prev_index"]),
+            prev_term=int(kwargs["prev_term"]),
+            leader_commit=int(kwargs["leader_commit"]),
+            entries=entries,
+        )
 
     def _candidate_log_up_to_date(self, last_log_index: int, last_log_term: int) -> bool:
         if last_log_term != self.last_log_term():

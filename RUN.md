@@ -131,13 +131,20 @@ PY
 
 Single-node dev (no Raft): `run_trading_server.py` (`RAFT_ENABLED=0` default).
 
+**Sessions:** Login is per trading peer. After `NOT_LEADER`, the CLI re-logins on the leader automatically for orders/admin reset.
+
+**Insight:** Set `LUCKYSTONKS_TRADING_ADDR` to any peer that has applied trades (e.g. `127.0.0.1:50051`). The read token only allows `Get TRADES`.
+
+**Leader replication:** Uses Raft-style `nextIndex` backtracking and same-term commit before applying orders.
+
 ---
 
 ## Troubleshooting
 
 | Issue | Fix |
 |-------|-----|
-| Connection refused (CLI) | Start `run_trading_server.py` |
+| Connection refused (CLI) | Start `run_trading_server.py` or peers 0–2 |
+| `NOT_LEADER;trading=...` | CLI retries on leader; or connect to that port and log in |
 | GetInsight refused | Start `run_llm.py` |
-| Empty insight / no trades | Run `demo` after restarting trading |
+| Empty insight / no trades | Run trades on cluster; point Insight addr at a peer |
 | Template-only LLM text | Check ngrok URL and vLLM in `.env` |
