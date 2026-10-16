@@ -65,6 +65,7 @@ pytest -q
 | `cluster_live_verify.sh` | `ALL LIVE CHECKS PASSED` | 3 peers → 2 trades → TRADES match on 50051/52/53 → kill leader → 2 trades on survivors → restart dead peer → parity |
 | `cluster_stress_live.sh` | `ALL STRESS + EDGE LIVE CHECKS PASSED` | 50 sequential orders → kill follower → write → restart → kill leader → write → admin reset → solo peer (no quorum) |
 | `cluster_advanced_stress_live.sh` | `ALL ADVANCED STRESS CHECKS PASSED` | Explicit `127.0.0.1` peer addrs → **200 parallel** CLI orders (40 workers) → kill peer 2 (majority still writes) → only peer 2 up (write fails) → restart all 3 → persisted TRADES parity |
+| `cluster_raft_advanced_live.sh` | `ALL RAFT ADVANCED LIVE CHECKS PASSED` | Low `RAFT_LOG_COMPACT_THRESHOLD` → many orders → log compaction → wipe peer 2 raft JSON + restart → TRADES parity (InstallSnapshot / catch-up) |
 
 Each script wipes `data/runtime/raft-peer*.json` and `state-peer*.json`, starts its own peer processes, and stops them when done.
 
@@ -82,7 +83,10 @@ Logs if a script fails:
 - `data/runtime/stress-live-logs/peer*.log`
 - `data/runtime/advanced-stress-logs/peer*.log`
 
-Optional: `RAFT_LOG_LEVEL=DEBUG python scripts/run_trading_peer.py 0`
+Optional env: `RAFT_LOG_LEVEL=DEBUG`, `RAFT_LOG_COMPACT_THRESHOLD=8` (default; lower = compact sooner).
+
+Admin **cluster membership** (leader only, replicated): `Post` type `CLUSTER_CHANGE` with JSON
+`{"action":"add|remove","peer_id":N,"raft_addr":"host:port","trading_addr":"host:port"}` (addrs may be empty for remove).
 
 ---
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import random
 import threading
 import time
@@ -10,7 +11,9 @@ import grpc
 from luckystonks.matching.models import Command
 from luckystonks.pb import raft_pb2
 
-from .codec import encode_admin_reset, encode_command
+from .cluster_config import PeerEndpoint
+from .codec import encode_admin_reset, encode_command, encode_config_change
+from .snapshot import DEFAULT_COMPACT_THRESHOLD
 from .leader_replicate import (
     init_leader_tracking,
     push_commit_to_followers,
@@ -39,6 +42,9 @@ class RaftRuntime:
         self.next_index: dict[int, int] = {}
         self.match_index: dict[int, int] = {}
         self.log = raft_logger(node.peer_id)
+        self.node.compact_threshold = int(
+            os.getenv("RAFT_LOG_COMPACT_THRESHOLD", str(DEFAULT_COMPACT_THRESHOLD))
+        )
 
     def reset_election_timer(self) -> None:
         self.election_deadline = time.monotonic() + random.uniform(*self.election_timeout_bounds)
@@ -102,6 +108,48 @@ class RaftRuntime:
     def _init_leader_tracking(self) -> None:
         self.next_index, self.match_index = init_leader_tracking(self.node, self._follower_ids())
 
+    def _on_config_change(self, payload: dict[str, str | int]) -> None:
+        self.peers.apply_config_change(payload)
+        ep = PeerEndpoint(
+            int(payload["peer_id"]),
+            str(payload["raft_addr"]),
+            str(payload.get("trading_addr") or ""),
+        )
+        action = str(payload["action"])
+        existing = {e.peer_id: e for e in self.node.cluster_endpoints}
+        if action == "add":
+            existing[ep.peer_id] = ep
+        elif action == "remove":
+            existing.pop(ep.peer_id, None)
+        self.node.cluster_endpoints = [existing[i] for i in sorted(existing)]
+        if self.node.role == "leader":
+            self._init_leader_tracking()
+
+    def _cluster_size(self) -> int:
+        return len(self.peers.peer_ids())
+
+    def _send_snapshot_local(
+        self,
+        pid: int,
+        term: int,
+        last_included_index: int,
+        last_included_term: int,
+        data: bytes,
+    ) -> dict[str, int | bool] | None:
+        reply = self._rpc_install_snapshot(
+            pid,
+            term=term,
+            last_included_index=last_included_index,
+            last_included_term=last_included_term,
+            data=data,
+        )
+        if reply is None:
+            return None
+        reply_term = int(reply.term)
+        if reply_term > self.node.current_term:
+            self._step_down(reply_term)
+        return {"entry_appended": True, "match_index": last_included_index, "term": reply_term}
+
     def _send_append_local(
         self, pid: int, term: int, prev_index: int, prev_term: int, commit: int, entries: list[LogEntry]
     ) -> dict[str, int | bool] | None:
@@ -142,14 +190,28 @@ class RaftRuntime:
                 return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
 
             ok = replicate_entry(
-                self.node, entry, followers, send, self.next_index, self.match_index, self.log
+                self.node,
+                entry,
+                followers,
+                send,
+                self.next_index,
+                self.match_index,
+                self._cluster_size(),
+                self._send_snapshot_local,
+                self.log,
             )
             if self.node.role != "leader":
                 self.log.info("replicate command aborted: stepped down")
                 return False
             if ok:
                 push_commit_to_followers(
-                    self.node, followers, send, self.next_index, self.match_index, self.log
+                    self.node,
+                    followers,
+                    send,
+                    self.next_index,
+                    self.match_index,
+                    self._send_snapshot_local,
+                    self.log,
                 )
                 self.log.info(
                     "replicate command ok commit=%s log_len=%s",
@@ -173,14 +235,28 @@ class RaftRuntime:
                 return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
 
             ok = replicate_entry(
-                self.node, entry, followers, send, self.next_index, self.match_index, self.log
+                self.node,
+                entry,
+                followers,
+                send,
+                self.next_index,
+                self.match_index,
+                self._cluster_size(),
+                self._send_snapshot_local,
+                self.log,
             )
             if self.node.role != "leader":
                 self.log.info("replicate admin reset aborted: stepped down")
                 return False
             if ok:
                 push_commit_to_followers(
-                    self.node, followers, send, self.next_index, self.match_index, self.log
+                    self.node,
+                    followers,
+                    send,
+                    self.next_index,
+                    self.match_index,
+                    self._send_snapshot_local,
+                    self.log,
                 )
                 self.log.info(
                     "replicate admin reset ok commit=%s",
@@ -188,6 +264,58 @@ class RaftRuntime:
                 )
             else:
                 self.log.info("replicate admin reset failed")
+            return ok
+
+    def replicate_config_change(
+        self, action: str, peer_id: int, raft_addr: str, trading_addr: str
+    ) -> bool:
+        with self.lock:
+            if self.node.role != "leader":
+                self.log.info("replicate config rejected: not leader (role=%s)", self.node.role)
+                return False
+            if action == "remove" and peer_id == self.node.peer_id:
+                return False
+            if action == "add" and peer_id in self.peers.peer_ids():
+                return False
+            if action == "remove" and peer_id not in self.peers.peer_ids():
+                return False
+            self.log.info(
+                "replicate config change action=%s peer_id=%s",
+                action,
+                peer_id,
+            )
+            entry = LogEntry(
+                self.node.current_term,
+                encode_config_change(action, peer_id, raft_addr, trading_addr),
+            )
+            followers = self._follower_ids()
+
+            def send(pid, term, prev_index, prev_term, commit, entries):
+                return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
+
+            ok = replicate_entry(
+                self.node,
+                entry,
+                followers,
+                send,
+                self.next_index,
+                self.match_index,
+                self._cluster_size(),
+                self._send_snapshot_local,
+                self.log,
+            )
+            if self.node.role != "leader":
+                return False
+            if ok:
+                push_commit_to_followers(
+                    self.node,
+                    followers,
+                    send,
+                    self.next_index,
+                    self.match_index,
+                    self._send_snapshot_local,
+                    self.log,
+                )
             return ok
 
     def _loop(self) -> None:
@@ -204,7 +332,8 @@ class RaftRuntime:
 
     def _run_election(self) -> None:
         term = self.node.begin_election()
-        quorum = len(self.peers.peer_ids()) // 2 + 1
+        cluster_size = self._cluster_size()
+        quorum = cluster_size // 2 + 1
         self.log.info("election started term=%s need_votes=%s", term, quorum)
         votes = 1
         for pid in self.peers.peer_ids():
@@ -232,7 +361,7 @@ class RaftRuntime:
             else:
                 self.log.info("vote rpc to peer=%s term=%s result=denied", pid, term)
 
-        if votes > len(self.peers.peer_ids()) // 2:
+        if votes > cluster_size // 2:
             self.node.become_leader()
             self._init_leader_tracking()
             self.last_heartbeat_sent = 0.0
@@ -248,7 +377,7 @@ class RaftRuntime:
                 "election failed term=%s votes=%s need=%s",
                 term,
                 votes,
-                len(self.peers.peer_ids()) // 2 + 1,
+                cluster_size // 2 + 1,
             )
             self.reset_election_timer()
 
@@ -267,7 +396,13 @@ class RaftRuntime:
             self.node.last_log_index(),
         )
         push_commit_to_followers(
-            self.node, followers, send, self.next_index, self.match_index, self.log
+            self.node,
+            followers,
+            send,
+            self.next_index,
+            self.match_index,
+            self._send_snapshot_local,
+            self.log,
         )
 
     def _rpc_request_vote(self, to_peer: int, term: int) -> raft_pb2.RequestVoteReply | None:
@@ -330,4 +465,36 @@ class RaftRuntime:
                     err.code(),
                     len(entries),
                 )
+            return None
+
+    def _rpc_install_snapshot(
+        self,
+        to_peer: int,
+        *,
+        term: int,
+        last_included_index: int,
+        last_included_term: int,
+        data: bytes,
+    ) -> raft_pb2.InstallSnapshotReply | None:
+        try:
+            return self.peers.stub(to_peer).InstallSnapshot(
+                raft_pb2.InstallSnapshotRequest(
+                    **{
+                        "from": self.node.peer_id,
+                        "to": to_peer,
+                        "term": term,
+                        "last_included_index": last_included_index,
+                        "last_included_term": last_included_term,
+                        "data": data,
+                        "done": True,
+                    }
+                ),
+                timeout=2.0,
+            )
+        except grpc.RpcError as err:
+            self.log.info(
+                "install snapshot to peer=%s failed: %s",
+                to_peer,
+                err.code(),
+            )
             return None

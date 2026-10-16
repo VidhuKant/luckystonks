@@ -54,12 +54,15 @@ class PeerRegistry:
         trading_addresses: dict[int, str] | None = None,
     ) -> None:
         self.peer_id = peer_id
-        self.addresses = addresses
-        self.trading_addresses = trading_addresses or {}
+        self.addresses = dict(addresses)
+        self.trading_addresses = dict(trading_addresses or {})
         self._stubs: dict[int, raft_pb2_grpc.RaftStub] = {}
 
     def peer_ids(self) -> list[int]:
         return sorted(self.addresses.keys())
+
+    def quorum_size(self) -> int:
+        return len(self.peer_ids()) // 2 + 1
 
     def stub(self, peer_id: int) -> raft_pb2_grpc.RaftStub:
         if peer_id not in self.addresses:
@@ -68,3 +71,34 @@ class PeerRegistry:
             channel = grpc.insecure_channel(self.addresses[peer_id])
             self._stubs[peer_id] = raft_pb2_grpc.RaftStub(channel)
         return self._stubs[peer_id]
+
+    def drop_stub(self, peer_id: int) -> None:
+        self._stubs.pop(peer_id, None)
+
+    def apply_config_change(self, payload: dict[str, str | int]) -> None:
+        action = str(payload["action"])
+        peer_id = int(payload["peer_id"])
+        raft_addr = str(payload["raft_addr"])
+        trading_addr = str(payload.get("trading_addr") or "")
+        if action == "add":
+            self.addresses[peer_id] = raft_addr
+            if trading_addr:
+                self.trading_addresses[peer_id] = trading_addr
+            self.drop_stub(peer_id)
+            return
+        if action == "remove":
+            if peer_id == self.peer_id:
+                raise ValueError("cannot remove self from cluster via config entry")
+            self.addresses.pop(peer_id, None)
+            self.trading_addresses.pop(peer_id, None)
+            self.drop_stub(peer_id)
+            return
+        raise ValueError(f"unknown config action: {action}")
+
+    def sync_from_endpoints(self, endpoints: list) -> None:
+        from .cluster_config import maps_from_endpoints
+
+        raft, trading = maps_from_endpoints(endpoints)
+        self.addresses = raft
+        self.trading_addresses = trading
+        self._stubs.clear()

@@ -33,7 +33,15 @@ def test_replicate_fails_when_only_leader_reachable() -> None:
     def send(pid, term, prev_index, prev_term, commit, entries):
         return None
 
-    ok = replicate_entry(leader, entry, followers, send, cluster.next_index, cluster.match_index)
+    ok = replicate_entry(
+        leader,
+        entry,
+        followers,
+        send,
+        cluster.next_index,
+        cluster.match_index,
+        len(cluster.registry.peer_ids()),
+    )
     assert not ok
     assert leader.commit_index == 0
     assert leader.last_log_index() == 1
@@ -62,7 +70,14 @@ def test_lagged_follower_catches_up_via_heartbeat_sync() -> None:
     def send(pid, term, prev_index, prev_term, commit, entries):
         return cluster._send_append(0, pid, term, prev_index, prev_term, commit, entries)
 
-    push_commit_to_followers(leader, followers, send, cluster.next_index, cluster.match_index)
+    push_commit_to_followers(
+        leader,
+        followers,
+        send,
+        cluster.next_index,
+        cluster.match_index,
+        None,
+    )
     assert len(follower.engine.trades) == 1
     assert engine_fingerprint(follower.engine) == engine_fingerprint(leader.engine)
 
@@ -83,7 +98,15 @@ def test_admin_reset_replicates_with_one_unreachable_follower() -> None:
             return None
         return cluster._send_append(1, pid, term, prev_index, prev_term, commit, entries)
 
-    ok = replicate_entry(leader, entry, followers, send, cluster.next_index, cluster.match_index)
+    ok = replicate_entry(
+        leader,
+        entry,
+        followers,
+        send,
+        cluster.next_index,
+        cluster.match_index,
+        len(cluster.registry.peer_ids()),
+    )
     assert ok
     assert cluster.nodes[0].engine.trades == []
     assert cluster.nodes[1].engine.trades == []

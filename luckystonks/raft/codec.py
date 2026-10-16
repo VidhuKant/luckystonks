@@ -7,6 +7,7 @@ from luckystonks.matching.engine import Engine
 from luckystonks.matching.models import Command
 
 ADMIN_RESET_KIND = "ADMIN_RESET"
+CONFIG_CHANGE_KIND = "CONFIG_CHANGE"
 
 
 def encode_command(command: Command) -> bytes:
@@ -37,15 +38,39 @@ def encode_admin_reset(seed_path: str) -> bytes:
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
+def encode_config_change(action: str, peer_id: int, raft_addr: str, trading_addr: str) -> bytes:
+    payload = {
+        "kind": CONFIG_CHANGE_KIND,
+        "action": action,
+        "peer_id": int(peer_id),
+        "raft_addr": raft_addr,
+        "trading_addr": trading_addr,
+    }
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+
+def decode_config_change(data: bytes) -> dict[str, str | int]:
+    payload = json.loads(data.decode("utf-8"))
+    if payload.get("kind") != CONFIG_CHANGE_KIND:
+        raise ValueError("not a config change entry")
+    return payload
+
+
 def apply_log_entry(
     engine: Engine,
     data: bytes,
     admin_reset_hooks: list[Callable[[], None]] | None = None,
+    config_change_hooks: list[Callable[[dict[str, str | int]], None]] | None = None,
 ) -> None:
     payload = json.loads(data.decode("utf-8"))
-    if payload.get("kind") == ADMIN_RESET_KIND:
+    kind = payload.get("kind")
+    if kind == ADMIN_RESET_KIND:
         engine.reset_from_seed(str(payload["seed_path"]))
         for hook in admin_reset_hooks or []:
             hook()
+        return
+    if kind == CONFIG_CHANGE_KIND:
+        for hook in config_change_hooks or []:
+            hook(payload)
         return
     engine.apply(decode_command(data))

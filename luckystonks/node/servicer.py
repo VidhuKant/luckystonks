@@ -57,6 +57,23 @@ class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
             self.sessions.clear()
             return trading_pb2.PostReply(status="OK", detail="market reset to seed")
 
+        if request.type == "CLUSTER_CHANGE":
+            if not self._is_admin(user_id):
+                return trading_pb2.PostReply(status="ERR", detail="admin only")
+            try:
+                payload = json.loads(request.data.decode("utf-8"))
+                action = str(payload["action"])
+                peer_id = int(payload["peer_id"])
+                raft_addr = str(payload["raft_addr"])
+                trading_addr = str(payload.get("trading_addr", ""))
+            except (UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+                return trading_pb2.PostReply(status="ERR", detail="invalid cluster payload")
+            if self.raft_runtime is None:
+                return trading_pb2.PostReply(status="ERR", detail="raft not enabled")
+            if not self.raft_runtime.replicate_config_change(action, peer_id, raft_addr, trading_addr):
+                return trading_pb2.PostReply(status="ERR", detail="cluster change replication failed")
+            return trading_pb2.PostReply(status="OK", detail=f"cluster {action} peer {peer_id}")
+
         try:
             command = self._parse_order(user_id, request)
             if self.raft_runtime is not None:

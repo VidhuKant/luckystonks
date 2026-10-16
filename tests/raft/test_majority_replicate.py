@@ -18,7 +18,15 @@ def test_replicate_succeeds_with_one_unreachable_follower() -> None:
             return None
         return cluster._send_append(0, pid, term, prev_index, prev_term, commit, entries)
 
-    ok = replicate_entry(leader, entry, followers, send, cluster.next_index, cluster.match_index)
+    ok = replicate_entry(
+        leader,
+        entry,
+        followers,
+        send,
+        cluster.next_index,
+        cluster.match_index,
+        len(cluster.registry.peer_ids()),
+    )
     assert ok
     assert leader.commit_index == 1
     assert len(leader.engine.trades) == 0

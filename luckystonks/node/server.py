@@ -50,6 +50,7 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
     if RAFT_ENABLED:
         from luckystonks.raft.log_util import configure_raft_logging, raft_logger
         from luckystonks.raft.node import RaftNode
+        from luckystonks.raft.cluster_config import endpoints_from_maps
         from luckystonks.raft.peers import (
             PeerRegistry,
             load_raft_peers_from_env,
@@ -69,12 +70,16 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
             raft_node = RaftNode(RAFT_PEER_ID, engine)
             raft_path = Path(RAFT_STATE_FILE)
             raft_node.raft_state_path = raft_path
+            raft_node.cluster_endpoints = endpoints_from_maps(raft_addrs, trading_addrs)
             if raft_path.is_file():
                 load_raft_state(raft_path, raft_node)
+                if raft_node.cluster_endpoints:
+                    peers.sync_from_endpoints(raft_node.cluster_endpoints)
                 while raft_node.last_applied < raft_node.commit_index:
                     raft_node._apply_committed()
             raft_node.admin_reset_hooks.append(lambda: servicer.sessions.clear())
             active_raft = RaftRuntime(raft_node, peers)
+            raft_node.config_change_hooks.append(active_raft._on_config_change)
             active_raft.start()
             servicer.raft_runtime = active_raft
         raft_bound = server.add_insecure_port(f"{HOST}:{RAFT_PORT}")

@@ -78,3 +78,30 @@ class RaftGrpcServicer(raft_pb2_grpc.RaftServicer):
                 "match_index": int(reply["match_index"]),
             }
         )
+
+    def InstallSnapshot(self, request, context):
+        from_peer = int(getattr(request, "from"))
+        with self.runtime.lock:
+            reply = self.runtime.node.handle_install_snapshot(
+                from_peer=from_peer,
+                to_peer=int(request.to),
+                term=int(request.term),
+                last_included_index=int(request.last_included_index),
+                last_included_term=int(request.last_included_term),
+                data=bytes(request.data),
+            )
+            self.runtime.reset_election_timer()
+            self.runtime.note_leader(from_peer)
+        self.log.info(
+            "rpc InstallSnapshot from=%s through=%s term=%s",
+            from_peer,
+            request.last_included_index,
+            request.term,
+        )
+        return raft_pb2.InstallSnapshotReply(
+            **{
+                "from": int(reply["from"]),
+                "to": int(reply["to"]),
+                "term": int(reply["term"]),
+            }
+        )

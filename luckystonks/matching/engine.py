@@ -127,9 +127,7 @@ class Engine:
             seq=int(data["seq"]),
         )
 
-    def save_state(self, path: str | Path) -> None:
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def state_payload(self) -> dict[str, Any]:
         books_payload: dict[str, Any] = {}
         for symbol, book in self.books.items():
             books_payload[symbol] = {
@@ -168,7 +166,7 @@ class Engine:
             }
             for cid, r in self.results_by_request.items()
         }
-        payload = {
+        return {
             "version": 1,
             "_next_order_id": self._next_order_id,
             "_next_trade_id": self._next_trade_id,
@@ -180,11 +178,25 @@ class Engine:
             "results_by_request": results_payload,
             "order_log": self.order_log,
         }
-        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def dump_state_bytes(self) -> bytes:
+        return json.dumps(self.state_payload(), separators=(",", ":")).encode("utf-8")
+
+    def load_state_bytes(self, data: bytes) -> None:
+        payload = json.loads(data.decode("utf-8"))
+        self._load_state_payload(payload)
+
+    def save_state(self, path: str | Path) -> None:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self.state_payload(), indent=2), encoding="utf-8")
 
     def load_state(self, path: str | Path) -> None:
         path = Path(path)
         payload = json.loads(path.read_text(encoding="utf-8"))
+        self._load_state_payload(payload)
+
+    def _load_state_payload(self, payload: dict[str, Any]) -> None:
         if payload.get("version") != 1:
             raise ValueError("unsupported state file version")
         self._next_order_id = int(payload["_next_order_id"])

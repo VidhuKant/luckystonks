@@ -7,9 +7,12 @@ from typing import Literal
 from luckystonks.matching.engine import Engine
 from luckystonks.matching.models import Command
 
+from .cluster_config import PeerEndpoint
 from .codec import apply_log_entry, encode_command
 from .log_entry import LogEntry
+from . import log_index
 from .log_util import raft_logger
+from .snapshot import handle_install_snapshot, maybe_compact
 
 Role = Literal["follower", "candidate", "leader"]
 
@@ -24,19 +27,23 @@ class RaftNode:
         self.log: list[LogEntry] = []
         self.commit_index: int = 0
         self.last_applied: int = 0
+        self.snapshot_last_included_index: int = 0
+        self.snapshot_last_included_term: int = 0
+        self.snapshot_data: bytes | None = None
+        self.compact_threshold: int = 8
+        self.cluster_endpoints: list[PeerEndpoint] = []
         self.raft_state_path: Path | None = None
         self.admin_reset_hooks: list[Callable[[], None]] = []
+        self.config_change_hooks: list[Callable[[dict[str, str | int]], None]] = []
 
     def _logger(self):
         return raft_logger(self.peer_id)
 
     def last_log_index(self) -> int:
-        return len(self.log)
+        return log_index.last_log_index(self)
 
     def last_log_term(self) -> int:
-        if not self.log:
-            return 0
-        return self.log[-1].term
+        return log_index.last_log_term(self)
 
     def handle_append_entries(
         self,
@@ -58,25 +65,39 @@ class RaftNode:
             self.role = "follower"
             self._logger().info("following leader=%s term=%s", from_peer, term)
 
+        if prev_index < self.snapshot_last_included_index:
+            self._logger().debug(
+                "append rejected: prev_index=%s before snapshot=%s",
+                prev_index,
+                self.snapshot_last_included_index,
+            )
+            return self._append_reply(from_peer, False, self.last_log_index())
+
         if prev_index > 0:
-            if prev_index > len(self.log) or self.log[prev_index - 1].term != prev_term:
-                self._logger().debug(
-                    "append rejected from=%s term=%s prev_index=%s (log mismatch)",
-                    from_peer,
-                    term,
-                    prev_index,
-                )
-                return self._append_reply(from_peer, False, self.last_log_index())
+            if prev_index == self.snapshot_last_included_index:
+                if prev_term != self.snapshot_last_included_term:
+                    return self._append_reply(from_peer, False, self.last_log_index())
+            else:
+                local_prev = prev_index - self.snapshot_last_included_index
+                if local_prev > len(self.log) or self.log[local_prev - 1].term != prev_term:
+                    self._logger().debug(
+                        "append rejected from=%s term=%s prev_index=%s (log mismatch)",
+                        from_peer,
+                        term,
+                        prev_index,
+                    )
+                    return self._append_reply(from_peer, False, self.last_log_index())
 
         if entries:
-            self.log = self.log[:prev_index]
+            local_prev = prev_index - self.snapshot_last_included_index
+            self.log = self.log[:local_prev]
             self.log.extend(entries)
             self._logger().info(
                 "appended %s entries from leader=%s term=%s log_len=%s",
                 len(entries),
                 from_peer,
                 term,
-                self.last_log_index(),
+                len(self.log),
             )
 
         if leader_commit > self.commit_index:
@@ -85,6 +106,28 @@ class RaftNode:
         self._apply_committed()
         self._maybe_persist()
         return self._append_reply(from_peer, True, self.last_log_index())
+
+    def handle_install_snapshot(
+        self,
+        *,
+        from_peer: int,
+        to_peer: int,
+        term: int,
+        last_included_index: int,
+        last_included_term: int,
+        data: bytes,
+    ) -> dict[str, int]:
+        reply = handle_install_snapshot(
+            self,
+            from_peer=from_peer,
+            term=term,
+            last_included_index=last_included_index,
+            last_included_term=last_included_term,
+            data=data,
+            log=self._logger(),
+        )
+        self.role = "follower"
+        return reply
 
     def leader_propose(self, command: Command, term: int | None = None) -> dict[str, int | bool]:
         use_term = term if term is not None else max(self.current_term, 1)
@@ -108,11 +151,20 @@ class RaftNode:
         rlog = log if log is not None else self._logger()
         while self.last_applied < self.commit_index:
             self.last_applied += 1
-            entry = self.log[self.last_applied - 1]
+            if self.last_applied <= self.snapshot_last_included_index:
+                continue
+            local = self.last_applied - self.snapshot_last_included_index
+            entry = self.log[local - 1]
             if not entry.command:
                 continue
-            apply_log_entry(self.engine, entry.command, self.admin_reset_hooks)
+            apply_log_entry(
+                self.engine,
+                entry.command,
+                self.admin_reset_hooks,
+                self.config_change_hooks,
+            )
             rlog.info("applied log index=%s commit=%s", self.last_applied, self.commit_index)
+        maybe_compact(self, self.compact_threshold, log=rlog)
         self._maybe_persist()
 
     def _maybe_persist(self) -> None:
