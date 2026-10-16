@@ -22,14 +22,14 @@ def main() -> None:
     os.environ.setdefault("RAFT_PEER_ID", str(peer_id))
     os.environ.setdefault("LUCKYSTONKS_PORT", str(trading_port))
     os.environ.setdefault("RAFT_PORT", str(raft_port))
-    os.environ.setdefault(
-        "RAFT_PEERS",
-        "0:60051,1:60052,2:60053",
-    )
-    os.environ.setdefault(
-        "TRADING_PEERS",
-        "0:50051,1:50052,2:50053",
-    )
+    os.environ.setdefault("RAFT_HOST", "127.0.0.1")
+    os.environ.setdefault("TRADING_HOST", "127.0.0.1")
+    if "RAFT_PEERS" not in os.environ:
+        host = os.environ["RAFT_HOST"]
+        os.environ["RAFT_PEERS"] = ",".join(f"{i}={host}:{60051 + i}" for i in range(3))
+    if "TRADING_PEERS" not in os.environ:
+        host = os.environ["TRADING_HOST"]
+        os.environ["TRADING_PEERS"] = ",".join(f"{i}={host}:{50051 + i}" for i in range(3))
     os.environ.setdefault(
         "LUCKYSTONKS_STATE_FILE",
         str(_ROOT / "data" / "runtime" / f"state-peer{peer_id}.json"),

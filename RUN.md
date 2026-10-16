@@ -39,35 +39,50 @@ Every terminal below: `cd luckystonks && source .venv/bin/activate`
 pytest -q
 ```
 
-Expect: all tests pass (Raft, matching, cluster parity, in-memory stress).
+Expect: `47 passed` (or current count), exit code 0.
 
 ---
 
-## 2. Automated live checks (3 real peer processes)
+## 2. Live cluster verification (run in order)
 
-These scripts start/stop peers for you, wipe `data/runtime/raft-peer*.json` and `state-peer*.json`, and assert success.
-
-**Basic M2 path** — election, 2 trades, same TRADES on all ports, kill leader, trade on 2 survivors, restart dead peer, parity again:
+One-time:
 
 ```bash
-chmod +x scripts/cluster_live_verify.sh
+chmod +x scripts/cluster_live_verify.sh scripts/cluster_stress_live.sh scripts/cluster_advanced_stress_live.sh
+```
+
+Full regression (same as CI-style local check; ~1–2 minutes):
+
+```bash
+pytest -q
 ./scripts/cluster_live_verify.sh
+./scripts/cluster_stress_live.sh
+./scripts/cluster_advanced_stress_live.sh
 ```
 
-Expect last line: `ALL LIVE CHECKS PASSED`
+| Script | Last line on success | What it runs |
+|--------|----------------------|--------------|
+| `cluster_live_verify.sh` | `ALL LIVE CHECKS PASSED` | 3 peers → 2 trades → TRADES match on 50051/52/53 → kill leader → 2 trades on survivors → restart dead peer → parity |
+| `cluster_stress_live.sh` | `ALL STRESS + EDGE LIVE CHECKS PASSED` | 50 sequential orders → kill follower → write → restart → kill leader → write → admin reset → solo peer (no quorum) |
+| `cluster_advanced_stress_live.sh` | `ALL ADVANCED STRESS CHECKS PASSED` | Explicit `127.0.0.1` peer addrs → **200 parallel** CLI orders (40 workers) → kill peer 2 (majority still writes) → only peer 2 up (write fails) → restart all 3 → persisted TRADES parity |
 
-**Stress + edge cases** — 50 replicated orders, kill a follower (not leader) then write, restart follower, kill leader then write, restart leader, admin reset on all peers, solo peer (no quorum):
+Each script wipes `data/runtime/raft-peer*.json` and `state-peer*.json`, starts its own peer processes, and stops them when done.
+
+Concurrent-only (peers must already be running; pick leader port 50051/52/53):
 
 ```bash
-chmod +x scripts/cluster_stress_live.sh
-./scripts/cluster_stress_live.sh
+python scripts/run_concurrent_orders.py --port 50051 --count 200 --workers 40
 ```
 
-Expect last line: `ALL STRESS + EDGE LIVE CHECKS PASSED`
+Expect: `"failed": 0` in JSON output.
 
-Logs on failure: `data/runtime/live-verify-logs/` or `data/runtime/stress-live-logs/peer*.log`
+Logs if a script fails:
 
-Raft log level (optional): `RAFT_LOG_LEVEL=DEBUG python scripts/run_trading_peer.py 0`
+- `data/runtime/live-verify-logs/peer*.log`
+- `data/runtime/stress-live-logs/peer*.log`
+- `data/runtime/advanced-stress-logs/peer*.log`
+
+Optional: `RAFT_LOG_LEVEL=DEBUG python scripts/run_trading_peer.py 0`
 
 ---
 
