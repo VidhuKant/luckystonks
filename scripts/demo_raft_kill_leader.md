@@ -9,7 +9,7 @@ python scripts/run_trading_peer.py 1
 python scripts/run_trading_peer.py 2
 ```
 
-Watch startup logs for `role=leader` on one peer (changes after elections).
+Watch logs for `became leader` on one peer (startup only prints initial `role=follower`; elections log within ~1s). Optional: `RAFT_LOG_LEVEL=DEBUG`.
 
 ## Client
 

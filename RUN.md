@@ -1,34 +1,8 @@
-# LuckyStonks — Run guide (faculty / evaluator)
-
-**Model:** `Qwen/Qwen3-0.6B` on a teammate’s machine via **ngrok**. Your machine runs **Trading**, **Insight**, and the **CLI** only.
-
----
-
-## Before you start (team)
-
-vLLM + ngrok must be running. You need the ngrok **`/v1`** base URL and model id `Qwen/Qwen3-0.6B` in `.env` (see below).
-
----
-
-## Accounts
-
-| Username | Password | Role / notes |
-|----------|----------|----------------|
-| `ved` | `ved` | ₹500000 + RELIANCE/TCS/HDFCBANK |
-| `pratham` | `pratham` | ₹500000 + INFY/WIPRO/TATAMOTORS |
-| `vidhu` | `vidhu` | ₹500000 + BHARTIARTL/ITC/SBIN |
-| `admin` | `admin` | admin; menu item 6 = all portfolios |
-
-**Interactive CLI:** `python -m luckystonks.client.cli` → login once → menu (portfolio, orders, book, trades, place order). **L** = logout (gRPC `Logout`), **Q** = quit.
-
-**Script CLI:** `demo`, `view`, and `order` still login per command (`view ved ved PORTFOLIO`).
-
----
+# LuckyStonks — Run guide
 
 ## One-time setup
 
 ```bash
-git clone https://github.com/VidhuKant/luckystonks.git
 cd luckystonks
 python3 -m venv .venv
 source .venv/bin/activate
@@ -37,7 +11,7 @@ chmod +x scripts/gen_proto.sh
 ./scripts/gen_proto.sh
 ```
 
-`.env` in repo root:
+Optional `.env` (Insight / LLM only):
 
 ```env
 LUCKYSTONKS_TRADING_READ_TOKEN=local-insight-read-token
@@ -46,96 +20,216 @@ LUCKYSTONKS_VLLM_BASE_URL=https://YOUR-SUBDOMAIN.ngrok-free.dev/v1
 LUCKYSTONKS_VLLM_MODEL=Qwen/Qwen3-0.6B
 ```
 
+## Accounts
+
+| Username | Password | Notes |
+|----------|----------|--------|
+| `ved` | `ved` | RELIANCE, TCS, HDFCBANK |
+| `pratham` | `pratham` | INFY, WIPRO, TATAMOTORS |
+| `vidhu` | `vidhu` | BHARTIARTL, ITC, SBIN |
+| `admin` | `admin` | Menu 6–8 |
+
+Every terminal below: `cd luckystonks && source .venv/bin/activate`
+
+---
+
+## 1. Automated tests (pytest)
+
 ```bash
 pytest -q
 ```
 
+Expect: all tests pass (Raft, matching, cluster parity, in-memory stress).
+
 ---
 
-## Run order (three terminals)
+## 2. Automated live checks (3 real peer processes)
 
-Each terminal:
+These scripts start/stop peers for you, wipe `data/runtime/raft-peer*.json` and `state-peer*.json`, and assert success.
+
+**Basic M2 path** — election, 2 trades, same TRADES on all ports, kill leader, trade on 2 survivors, restart dead peer, parity again:
 
 ```bash
-cd luckystonks
-source .venv/bin/activate
+chmod +x scripts/cluster_live_verify.sh
+./scripts/cluster_live_verify.sh
 ```
 
-**Terminal 1 — Trading**
+Expect last line: `ALL LIVE CHECKS PASSED`
+
+**Stress + edge cases** — 50 replicated orders, kill a follower (not leader) then write, restart follower, kill leader then write, restart leader, admin reset on all peers, solo peer (no quorum):
+
+```bash
+chmod +x scripts/cluster_stress_live.sh
+./scripts/cluster_stress_live.sh
+```
+
+Expect last line: `ALL STRESS + EDGE LIVE CHECKS PASSED`
+
+Logs on failure: `data/runtime/live-verify-logs/` or `data/runtime/stress-live-logs/peer*.log`
+
+Raft log level (optional): `RAFT_LOG_LEVEL=DEBUG python scripts/run_trading_peer.py 0`
+
+---
+
+## 3. Single-server demo (no Raft)
+
+**Terminal A — server**
 
 ```bash
 python scripts/run_trading_server.py
 ```
 
-**Terminal 2 — Insight**
+**Terminal B — client (pick one)**
 
-```bash
-python scripts/run_llm.py
-```
-
-**Terminal 3 — Client**
-
-Interactive:
-
-```bash
-python -m luckystonks.client.cli
-```
-
-Or scripted demo:
+Scripted:
 
 ```bash
 python -m luckystonks.client.cli demo
 python -m luckystonks.client.cli view pratham pratham TRADES
 ```
 
-**GetInsight** (after demo, terminals 1–2 up):
+Interactive login + menu:
 
 ```bash
-python <<'PY'
-import grpc
-from luckystonks.pb import llm_pb2, llm_pb2_grpc
-stub = llm_pb2_grpc.InsightStub(grpc.insecure_channel("127.0.0.1:50070"))
-print(stub.GetInsight(
-    llm_pb2.GetInsightRequest(request_id="1", query="Summarize recent market activity.", context=""),
-    timeout=120,
-).answer)
-PY
+python -m luckystonks.client.cli --port 50051
 ```
+
+**Stop server:** Terminal A → `Ctrl+C`
+
+---
+
+## 4. Multi-peer cluster demo (Raft, M2)
+
+### 4.1 Start cluster
+
+**Terminal A**
+
+```bash
+python scripts/run_trading_peer.py 0
+```
+
+**Terminal B**
+
+```bash
+python scripts/run_trading_peer.py 1
+```
+
+**Terminal C**
+
+```bash
+python scripts/run_trading_peer.py 2
+```
+
+Start all three within ~10 seconds. In logs, find **`became leader`** on exactly one terminal (peer 0 → port **50051**, peer 1 → **50052**, peer 2 → **50053**).
+
+Optional clean state before start:
+
+```bash
+rm -f data/runtime/raft-peer*.json data/runtime/state-peer*.json
+```
+
+### 4.2 Client on a non-leader (recommended for demo)
+
+You may use **any** trading port. Connect to a **follower** on purpose; orders (menu **5**) and admin reset (menu **8**) redirect to the leader and re-login automatically.
+
+**Terminal D**
+
+```bash
+python -m luckystonks.client.cli --port 50052
+```
+
+(Use `50051` or `50053` instead if you prefer.)
+
+Do **not** use `cli demo` on the cluster — it does not follow leader redirect. Use interactive menu **5** or `order` subcommand.
+
+### 4.3 Interactive login and menu
+
+1. Username / password (e.g. `ved` / `ved`).
+2. Menu:
+
+| Key | Action |
+|-----|--------|
+| 1 | Portfolio |
+| 2 | Open orders |
+| 3 | Order book |
+| 4 | Trades |
+| 5 | Place limit order |
+| 6 | Admin: all portfolios |
+| 7 | Admin: order log |
+| 8 | Admin: reset market (type `YES`) |
+| L | Logout |
+| Q | Quit |
+
+Example trade: login `ved` → **5** → SELL RELIANCE 2450 qty 10 → **L** → login `pratham` → **5** → BUY RELIANCE 2450 qty 10 → **4** to view trades.
+
+Scripted (same cluster, any port):
+
+```bash
+python -m luckystonks.client.cli --port 50052 order ved ved SELL RELIANCE 2450 10
+python -m luckystonks.client.cli --port 50052 order pratham pratham BUY RELIANCE 2450 10
+python -m luckystonks.client.cli --port 50051 view admin admin TRADES
+python -m luckystonks.client.cli --port 50052 view admin admin TRADES
+python -m luckystonks.client.cli --port 50053 view admin admin TRADES
+```
+
+All three `TRADES` outputs must match.
+
+### 4.4 Kill-leader demo (manual)
+
+1. Note which terminal logged **`became leader`** (that peer is the leader).
+2. **Ctrl+C** only that terminal (leader). Leave the other two running.
+3. Wait ~2 seconds; another peer should log **`became leader`**.
+4. Terminal D — use a **survivor** port (not the dead peer’s port):
+
+```bash
+python -m luckystonks.client.cli --port 50051 order ved ved SELL TCS 3500 5
+python -m luckystonks.client.cli --port 50051 order pratham pratham BUY TCS 3500 5
+```
+
+5. Check `view admin admin TRADES` on survivor ports.
+6. Restart killed peer in its terminal:
+
+```bash
+python scripts/run_trading_peer.py N
+```
+
+(`N` = 0, 1, or 2). Wait a few seconds; TRADES on all three ports should match again.
+
+### 4.5 Stop cluster
+
+**Ctrl+C** in each peer terminal (A, B, C). Or from repo root:
+
+```bash
+lsof -i :50051 -i :50052 -i :50053 -i :60051 -i :60052 -i :60053
+```
+
+Kill any leftover `python` peer processes if ports stay bound.
+
+---
+
+## 5. Insight (optional)
+
+**Terminal — Insight**
+
+```bash
+python scripts/run_llm.py
+```
+
+Requires `.env` with `LUCKYSTONKS_TRADING_ADDR` pointing at a peer that has trades (e.g. `127.0.0.1:50051`). vLLM/ngrok optional for non-template answers.
 
 ---
 
 ## Ports
 
-| Service | Port | Command |
-|---------|------|---------|
-| Trading (single node) | 50051 | `python scripts/run_trading_server.py` |
-| Trading peers | 50051 / 50052 / 50053 | `python scripts/run_trading_peer.py 0|1|2` |
-| Raft peers | 60051 / 60052 / 60053 | same peer processes |
-| Insight | 50070 | `python scripts/run_llm.py` |
-| vLLM | ngrok | teammate’s host |
+| Service | Port |
+|---------|------|
+| Trading single / peer 0 | 50051 |
+| Trading peer 1 | 50052 |
+| Trading peer 2 | 50053 |
+| Raft peer 0 / 1 / 2 | 60051 / 60052 / 60053 |
+| Insight | 50070 |
 
----
-
-## Raft cluster (M2)
-
-**Three peers:** run `run_trading_peer.py` with `0`, `1`, and `2` in separate terminals. Each peer stores:
-
-- `data/runtime/state-peer{N}.json` — market engine snapshot  
-- `data/runtime/raft-peer{N}.json` — Raft term + log  
-
-**Writes (orders, admin reset)** go through the **Raft leader**. Followers return `NOT_LEADER;trading=host:port`. The interactive CLI re-logins on the leader and retries.
-
-**Reads** (`Get` portfolio, book, trades, admin views) work on any peer once it has applied committed entries.
-
-**Kill-leader demo:** see [scripts/demo_raft_kill_leader.md](scripts/demo_raft_kill_leader.md).
-
-Single-node dev (no Raft): `run_trading_server.py` (`RAFT_ENABLED=0` default).
-
-**Sessions:** Login is per trading peer. After `NOT_LEADER`, the CLI re-logins on the leader automatically for orders/admin reset.
-
-**Insight:** Set `LUCKYSTONKS_TRADING_ADDR` to any peer that has applied trades (e.g. `127.0.0.1:50051`). The read token only allows `Get TRADES`.
-
-**Leader replication:** Uses Raft-style `nextIndex` backtracking and same-term commit before applying orders.
+Persistence: `data/runtime/state-peer{N}.json`, `data/runtime/raft-peer{N}.json`
 
 ---
 
@@ -143,8 +237,9 @@ Single-node dev (no Raft): `run_trading_server.py` (`RAFT_ENABLED=0` default).
 
 | Issue | Fix |
 |-------|-----|
-| Connection refused (CLI) | Start `run_trading_server.py` or peers 0–2 |
-| `NOT_LEADER;trading=...` | CLI retries on leader; or connect to that port and log in |
-| GetInsight refused | Start `run_llm.py` |
-| Empty insight / no trades | Run trades on cluster; point Insight addr at a peer |
-| Template-only LLM text | Check ngrok URL and vLLM in `.env` |
+| Connection refused | Start server or all three peers |
+| `cli demo` fails on cluster | Use menu **5** or `order` |
+| `replication failed` | Need 2 of 3 peers up; restart missing peer |
+| `NOT_LEADER;trading=...` | CLI should retry; or use port in hint |
+| After admin reset | Log in again |
+| Dead peer port | Do not use that `--port` until peer is restarted |

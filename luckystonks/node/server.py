@@ -48,6 +48,7 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
     )
 
     if RAFT_ENABLED:
+        from luckystonks.raft.log_util import configure_raft_logging, raft_logger
         from luckystonks.raft.node import RaftNode
         from luckystonks.raft.peers import (
             PeerRegistry,
@@ -57,6 +58,9 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
         from luckystonks.raft.persist import load_raft_state
         from luckystonks.raft.runtime import RaftRuntime
         from luckystonks.raft.servicer import RaftGrpcServicer
+
+        configure_raft_logging()
+        startup_log = raft_logger(RAFT_PEER_ID)
 
         if active_raft is None:
             raft_addrs = load_raft_peers_from_env()
@@ -83,8 +87,13 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
     server.start()
 
     if RAFT_ENABLED:
-        print(
-            f"LuckyStonks peer {RAFT_PEER_ID} trading={HOST}:{PORT} raft={HOST}:{RAFT_PORT} role={active_raft.node.role}"
+        startup_log.info(
+            "LuckyStonks peer trading=%s:%s raft=%s:%s (initial role=%s; watch logs for elections)",
+            HOST,
+            PORT,
+            HOST,
+            RAFT_PORT,
+            active_raft.node.role,
         )
     else:
         print(f"LuckyStonks Trading server running on {HOST}:{PORT}")

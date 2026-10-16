@@ -9,6 +9,7 @@ from luckystonks.matching.models import Command
 
 from .codec import apply_log_entry, encode_command
 from .log_entry import LogEntry
+from .log_util import raft_logger
 
 Role = Literal["follower", "candidate", "leader"]
 
@@ -25,6 +26,9 @@ class RaftNode:
         self.last_applied: int = 0
         self.raft_state_path: Path | None = None
         self.admin_reset_hooks: list[Callable[[], None]] = []
+
+    def _logger(self):
+        return raft_logger(self.peer_id)
 
     def last_log_index(self) -> int:
         return len(self.log)
@@ -52,14 +56,28 @@ class RaftNode:
             self.current_term = term
             self.voted_for = None
             self.role = "follower"
+            self._logger().info("following leader=%s term=%s", from_peer, term)
 
         if prev_index > 0:
             if prev_index > len(self.log) or self.log[prev_index - 1].term != prev_term:
+                self._logger().debug(
+                    "append rejected from=%s term=%s prev_index=%s (log mismatch)",
+                    from_peer,
+                    term,
+                    prev_index,
+                )
                 return self._append_reply(from_peer, False, self.last_log_index())
 
         if entries:
             self.log = self.log[:prev_index]
             self.log.extend(entries)
+            self._logger().info(
+                "appended %s entries from leader=%s term=%s log_len=%s",
+                len(entries),
+                from_peer,
+                term,
+                self.last_log_index(),
+            )
 
         if leader_commit > self.commit_index:
             self.commit_index = min(leader_commit, self.last_log_index())
@@ -86,13 +104,15 @@ class RaftNode:
             entries=[new_entry],
         )
 
-    def _apply_committed(self) -> None:
+    def _apply_committed(self, log=None) -> None:
+        rlog = log if log is not None else self._logger()
         while self.last_applied < self.commit_index:
             self.last_applied += 1
             entry = self.log[self.last_applied - 1]
             if not entry.command:
                 continue
             apply_log_entry(self.engine, entry.command, self.admin_reset_hooks)
+            rlog.info("applied log index=%s commit=%s", self.last_applied, self.commit_index)
         self._maybe_persist()
 
     def _maybe_persist(self) -> None:
@@ -146,6 +166,7 @@ class RaftNode:
         self.current_term += 1
         self.role = "candidate"
         self.voted_for = self.peer_id
+        self._logger().debug("role=candidate term=%s", self.current_term)
         self._maybe_persist()
         return self.current_term
 
@@ -174,6 +195,13 @@ class RaftNode:
             grant = True
             self._maybe_persist()
 
+        self._logger().debug(
+            "vote request from=%s term=%s grant=%s voted_for=%s",
+            from_peer,
+            term,
+            grant,
+            self.voted_for,
+        )
         return self._vote_reply(from_peer, grant)
 
     def become_leader(self) -> None:

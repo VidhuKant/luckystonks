@@ -17,6 +17,7 @@ from .leader_replicate import (
     replicate_entry,
 )
 from .log_entry import LogEntry
+from .log_util import raft_logger
 from .peers import PeerRegistry
 
 if TYPE_CHECKING:
@@ -37,6 +38,7 @@ class RaftRuntime:
         self.known_leader_id: int | None = None
         self.next_index: dict[int, int] = {}
         self.match_index: dict[int, int] = {}
+        self.log = raft_logger(node.peer_id)
 
     def reset_election_timer(self) -> None:
         self.election_deadline = time.monotonic() + random.uniform(*self.election_timeout_bounds)
@@ -49,6 +51,13 @@ class RaftRuntime:
         self.last_heartbeat_sent = 0.0
         self._thread = threading.Thread(target=self._loop, name=f"raft-{self.node.peer_id}", daemon=True)
         self._thread.start()
+        self.log.info(
+            "raft runtime started role=%s term=%s commit=%s log_len=%s",
+            self.node.role,
+            self.node.current_term,
+            self.node.commit_index,
+            self.node.last_log_index(),
+        )
 
     def stop(self) -> None:
         self.running = False
@@ -58,7 +67,19 @@ class RaftRuntime:
             return self.node.role == "leader"
 
     def note_leader(self, leader_id: int) -> None:
+        if self.known_leader_id != leader_id:
+            self.log.debug("known leader updated peer=%s", leader_id)
         self.known_leader_id = leader_id
+        if self.node.role != "leader":
+            self.reset_election_timer()
+
+    def _step_down(self, new_term: int) -> None:
+        if new_term > self.node.current_term:
+            self.log.info("stepping down: adopting term=%s (was leader=%s)", new_term, self.node.role)
+            self.node.current_term = new_term
+        self.node.role = "follower"
+        self.node.voted_for = None
+        self.reset_election_timer()
 
     def trading_address(self, peer_id: int) -> str | None:
         return self.peers.trading_addresses.get(peer_id)
@@ -83,7 +104,7 @@ class RaftRuntime:
 
     def _send_append_local(
         self, pid: int, term: int, prev_index: int, prev_term: int, commit: int, entries: list[LogEntry]
-    ) -> dict[str, int | bool]:
+    ) -> dict[str, int | bool] | None:
         reply = self._rpc_append_entries(
             pid,
             term=term,
@@ -91,43 +112,82 @@ class RaftRuntime:
             prev_term=prev_term,
             leader_commit=commit,
             entries=entries,
+            heartbeat=len(entries) == 0,
         )
         if reply is None:
-            return {"entry_appended": False, "match_index": 0, "term": term}
+            return None
+        reply_term = int(reply.term)
+        if reply_term > self.node.current_term:
+            self._step_down(reply_term)
         return {
             "entry_appended": reply.entry_appended,
             "match_index": int(reply.match_index),
-            "term": int(reply.term),
+            "term": reply_term,
         }
 
     def replicate_command(self, command: Command) -> bool:
         with self.lock:
             if self.node.role != "leader":
+                self.log.info("replicate command rejected: not leader (role=%s)", self.node.role)
                 return False
+            self.log.info(
+                "replicate command start client_request_id=%s user=%s",
+                command.client_request_id,
+                command.user_id,
+            )
             entry = LogEntry(self.node.current_term, encode_command(command))
             followers = self._follower_ids()
 
             def send(pid, term, prev_index, prev_term, commit, entries):
                 return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
 
-            ok = replicate_entry(self.node, entry, followers, send, self.next_index, self.match_index)
+            ok = replicate_entry(
+                self.node, entry, followers, send, self.next_index, self.match_index, self.log
+            )
+            if self.node.role != "leader":
+                self.log.info("replicate command aborted: stepped down")
+                return False
             if ok:
-                push_commit_to_followers(self.node, followers, send, self.next_index, self.match_index)
+                push_commit_to_followers(
+                    self.node, followers, send, self.next_index, self.match_index, self.log
+                )
+                self.log.info(
+                    "replicate command ok commit=%s log_len=%s",
+                    self.node.commit_index,
+                    self.node.last_log_index(),
+                )
+            else:
+                self.log.info("replicate command failed")
             return ok
 
     def replicate_admin_reset(self, seed_path: str) -> bool:
         with self.lock:
             if self.node.role != "leader":
+                self.log.info("replicate admin reset rejected: not leader (role=%s)", self.node.role)
                 return False
+            self.log.info("replicate admin reset start seed=%s", seed_path)
             entry = LogEntry(self.node.current_term, encode_admin_reset(seed_path))
             followers = self._follower_ids()
 
             def send(pid, term, prev_index, prev_term, commit, entries):
                 return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
 
-            ok = replicate_entry(self.node, entry, followers, send, self.next_index, self.match_index)
+            ok = replicate_entry(
+                self.node, entry, followers, send, self.next_index, self.match_index, self.log
+            )
+            if self.node.role != "leader":
+                self.log.info("replicate admin reset aborted: stepped down")
+                return False
             if ok:
-                push_commit_to_followers(self.node, followers, send, self.next_index, self.match_index)
+                push_commit_to_followers(
+                    self.node, followers, send, self.next_index, self.match_index, self.log
+                )
+                self.log.info(
+                    "replicate admin reset ok commit=%s",
+                    self.node.commit_index,
+                )
+            else:
+                self.log.info("replicate admin reset failed")
             return ok
 
     def _loop(self) -> None:
@@ -144,14 +204,23 @@ class RaftRuntime:
 
     def _run_election(self) -> None:
         term = self.node.begin_election()
+        quorum = len(self.peers.peer_ids()) // 2 + 1
+        self.log.info("election started term=%s need_votes=%s", term, quorum)
         votes = 1
         for pid in self.peers.peer_ids():
             if pid == self.node.peer_id:
                 continue
             reply = self._rpc_request_vote(pid, term)
             if reply is None:
+                self.log.info("vote rpc to peer=%s term=%s result=timeout", pid, term)
                 continue
             if reply.term > term:
+                self.log.info(
+                    "election aborted: peer=%s sent higher term=%s (was %s)",
+                    pid,
+                    reply.term,
+                    term,
+                )
                 self.node.current_term = reply.term
                 self.node.role = "follower"
                 self.node.voted_for = None
@@ -159,13 +228,28 @@ class RaftRuntime:
                 return
             if reply.vote_granted:
                 votes += 1
+                self.log.info("vote rpc to peer=%s term=%s result=granted", pid, term)
+            else:
+                self.log.info("vote rpc to peer=%s term=%s result=denied", pid, term)
 
         if votes > len(self.peers.peer_ids()) // 2:
             self.node.become_leader()
             self._init_leader_tracking()
             self.last_heartbeat_sent = 0.0
+            self.log.info(
+                "became leader term=%s commit=%s log_len=%s",
+                self.node.current_term,
+                self.node.commit_index,
+                self.node.last_log_index(),
+            )
             self._send_heartbeats()
         else:
+            self.log.info(
+                "election failed term=%s votes=%s need=%s",
+                term,
+                votes,
+                len(self.peers.peer_ids()) // 2 + 1,
+            )
             self.reset_election_timer()
 
     def _send_heartbeats(self) -> None:
@@ -176,7 +260,15 @@ class RaftRuntime:
         def send(pid, term, prev_index, prev_term, commit, entries):
             return self._send_append_local(pid, term, prev_index, prev_term, commit, entries)
 
-        push_commit_to_followers(self.node, followers, send, self.next_index, self.match_index)
+        self.log.debug(
+            "heartbeat term=%s commit=%s log_len=%s",
+            self.node.current_term,
+            self.node.commit_index,
+            self.node.last_log_index(),
+        )
+        push_commit_to_followers(
+            self.node, followers, send, self.next_index, self.match_index, self.log
+        )
 
     def _rpc_request_vote(self, to_peer: int, term: int) -> raft_pb2.RequestVoteReply | None:
         try:
@@ -192,7 +284,8 @@ class RaftRuntime:
                 ),
                 timeout=0.5,
             )
-        except grpc.RpcError:
+        except grpc.RpcError as err:
+            self.log.info("request vote to peer=%s failed: %s", to_peer, err.code())
             return None
 
     def _rpc_append_entries(
@@ -204,6 +297,7 @@ class RaftRuntime:
         prev_term: int,
         leader_commit: int,
         entries: list[LogEntry],
+        heartbeat: bool = False,
     ) -> raft_pb2.AppendEntriesReply | None:
         try:
             return self.peers.stub(to_peer).AppendEntries(
@@ -222,5 +316,18 @@ class RaftRuntime:
                 ),
                 timeout=0.5,
             )
-        except grpc.RpcError:
+        except grpc.RpcError as err:
+            if heartbeat:
+                self.log.debug(
+                    "append entries to peer=%s failed: %s (heartbeat)",
+                    to_peer,
+                    err.code(),
+                )
+            else:
+                self.log.info(
+                    "append entries to peer=%s failed: %s (entries=%s)",
+                    to_peer,
+                    err.code(),
+                    len(entries),
+                )
             return None
