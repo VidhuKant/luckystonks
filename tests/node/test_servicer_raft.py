@@ -23,6 +23,12 @@ class _FakeRaft:
         self.engine.apply(command)
         return True
 
+    def replicate_admin_reset(self, seed_path: str) -> bool:
+        if not self._leader:
+            return False
+        self.engine.reset_from_seed(seed_path)
+        return True
+
 
 def _order_bytes(client_request_id: str = "req-1") -> bytes:
     return json.dumps(

@@ -34,6 +34,10 @@ def main() -> None:
         "LUCKYSTONKS_STATE_FILE",
         str(_ROOT / "data" / "runtime" / f"state-peer{peer_id}.json"),
     )
+    os.environ.setdefault(
+        "RAFT_STATE_FILE",
+        str(_ROOT / "data" / "runtime" / f"raft-peer{peer_id}.json"),
+    )
 
     from luckystonks.env_loader import load_project_env
 

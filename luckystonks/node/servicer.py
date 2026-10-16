@@ -45,8 +45,14 @@ class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
                 return trading_pb2.PostReply(status="ERR", detail="admin only")
             if not self.seed_file:
                 return trading_pb2.PostReply(status="ERR", detail="seed file not configured")
-            if self.raft_runtime is not None and not self.raft_runtime.is_leader():
-                return trading_pb2.PostReply(status="ERR", detail=self.raft_runtime.not_leader_detail())
+            if self.raft_runtime is not None:
+                if not self.raft_runtime.is_leader():
+                    return trading_pb2.PostReply(
+                        status="ERR", detail=self.raft_runtime.not_leader_detail()
+                    )
+                if not self.raft_runtime.replicate_admin_reset(self.seed_file):
+                    return trading_pb2.PostReply(status="ERR", detail="replication failed")
+                return trading_pb2.PostReply(status="OK", detail="market reset to seed")
             self.engine.reset_from_seed(self.seed_file)
             self.sessions.clear()
             return trading_pb2.PostReply(status="OK", detail="market reset to seed")

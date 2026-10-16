@@ -19,6 +19,10 @@ _DEFAULT_SEED = Path(__file__).resolve().parent.parent.parent / "data" / "seed_u
 _DEFAULT_STATE = Path(__file__).resolve().parent.parent.parent / "data" / "runtime" / "state.json"
 SEED_FILE = os.getenv("LUCKYSTONKS_SEED_FILE", str(_DEFAULT_SEED))
 STATE_FILE = os.getenv("LUCKYSTONKS_STATE_FILE", str(_DEFAULT_STATE))
+_DEFAULT_RAFT_STATE = (
+    Path(__file__).resolve().parent.parent.parent / "data" / "runtime" / f"raft-peer{RAFT_PEER_ID}.json"
+)
+RAFT_STATE_FILE = os.getenv("RAFT_STATE_FILE", str(_DEFAULT_RAFT_STATE))
 
 def serve(engine: Engine | None = None, raft_runtime=None) -> None:
     engine = engine or Engine()
@@ -35,7 +39,14 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
     if bound_port == 0:
         raise RuntimeError(f"could not bind Trading server to {HOST}:{PORT}")
 
-    raft_runtime = None
+    active_raft = raft_runtime
+    servicer = LuckyStonksServicer(
+        engine,
+        insight_read_token=INSIGHT_READ_TOKEN,
+        seed_file=SEED_FILE,
+        raft_runtime=active_raft,
+    )
+
     if RAFT_ENABLED:
         from luckystonks.raft.node import RaftNode
         from luckystonks.raft.peers import (
@@ -43,35 +54,37 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
             load_raft_peers_from_env,
             load_trading_peers_from_env,
         )
+        from luckystonks.raft.persist import load_raft_state
         from luckystonks.raft.runtime import RaftRuntime
         from luckystonks.raft.servicer import RaftGrpcServicer
 
-        if raft_runtime is None:
+        if active_raft is None:
             raft_addrs = load_raft_peers_from_env()
             trading_addrs = load_trading_peers_from_env(raft_addrs)
             peers = PeerRegistry(RAFT_PEER_ID, raft_addrs, trading_addrs)
-            raft_runtime = RaftRuntime(RaftNode(RAFT_PEER_ID, engine), peers)
-            raft_runtime.start()
+            raft_node = RaftNode(RAFT_PEER_ID, engine)
+            raft_path = Path(RAFT_STATE_FILE)
+            raft_node.raft_state_path = raft_path
+            if raft_path.is_file():
+                load_raft_state(raft_path, raft_node)
+                while raft_node.last_applied < raft_node.commit_index:
+                    raft_node._apply_committed()
+            raft_node.admin_reset_hooks.append(lambda: servicer.sessions.clear())
+            active_raft = RaftRuntime(raft_node, peers)
+            active_raft.start()
+            servicer.raft_runtime = active_raft
         raft_bound = server.add_insecure_port(f"{HOST}:{RAFT_PORT}")
         if raft_bound == 0:
             raise RuntimeError(f"could not bind Raft server to {HOST}:{RAFT_PORT}")
-        raft_pb2_grpc.add_RaftServicer_to_server(RaftGrpcServicer(raft_runtime), server)
+        raft_pb2_grpc.add_RaftServicer_to_server(RaftGrpcServicer(active_raft), server)
 
-    trading_pb2_grpc.add_TradingServicer_to_server(
-        LuckyStonksServicer(
-            engine,
-            insight_read_token=INSIGHT_READ_TOKEN,
-            seed_file=SEED_FILE,
-            raft_runtime=raft_runtime,
-        ),
-        server,
-    )
+    trading_pb2_grpc.add_TradingServicer_to_server(servicer, server)
 
     server.start()
 
     if RAFT_ENABLED:
         print(
-            f"LuckyStonks peer {RAFT_PEER_ID} trading={HOST}:{PORT} raft={HOST}:{RAFT_PORT} role={raft_runtime.node.role}"
+            f"LuckyStonks peer {RAFT_PEER_ID} trading={HOST}:{PORT} raft={HOST}:{RAFT_PORT} role={active_raft.node.role}"
         )
     else:
         print(f"LuckyStonks Trading server running on {HOST}:{PORT}")

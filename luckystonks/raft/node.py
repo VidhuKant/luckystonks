@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from pathlib import Path
 from typing import Literal
 
 from luckystonks.matching.engine import Engine
 from luckystonks.matching.models import Command
 
-from .codec import decode_command, encode_command
+from .codec import apply_log_entry, encode_command
 from .log_entry import LogEntry
 
 Role = Literal["follower", "candidate", "leader"]
@@ -21,6 +23,8 @@ class RaftNode:
         self.log: list[LogEntry] = []
         self.commit_index: int = 0
         self.last_applied: int = 0
+        self.raft_state_path: Path | None = None
+        self.admin_reset_hooks: list[Callable[[], None]] = []
 
     def last_log_index(self) -> int:
         return len(self.log)
@@ -61,6 +65,7 @@ class RaftNode:
             self.commit_index = min(leader_commit, self.last_log_index())
 
         self._apply_committed()
+        self._maybe_persist()
         return self._append_reply(from_peer, True, self.last_log_index())
 
     def leader_propose(self, command: Command, term: int | None = None) -> dict[str, int | bool]:
@@ -87,7 +92,14 @@ class RaftNode:
             entry = self.log[self.last_applied - 1]
             if not entry.command:
                 continue
-            self.engine.apply(decode_command(entry.command))
+            apply_log_entry(self.engine, entry.command, self.admin_reset_hooks)
+        self._maybe_persist()
+
+    def _maybe_persist(self) -> None:
+        if self.raft_state_path is not None:
+            from .persist import save_raft_state
+
+            save_raft_state(self.raft_state_path, self)
 
     def _append_reply(self, to_peer: int, success: bool, match_index: int) -> dict[str, int | bool]:
         return {
@@ -125,6 +137,7 @@ class RaftNode:
         self.current_term += 1
         self.role = "candidate"
         self.voted_for = self.peer_id
+        self._maybe_persist()
         return self.current_term
 
     def handle_request_vote(
@@ -150,6 +163,7 @@ class RaftNode:
         ):
             self.voted_for = from_peer
             grant = True
+            self._maybe_persist()
 
         return self._vote_reply(from_peer, grant)
 

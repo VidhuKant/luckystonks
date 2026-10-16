@@ -108,9 +108,28 @@ PY
 
 | Service | Port | Command |
 |---------|------|---------|
-| Trading | 50051 | `python scripts/run_trading_server.py` |
+| Trading (single node) | 50051 | `python scripts/run_trading_server.py` |
+| Trading peers | 50051 / 50052 / 50053 | `python scripts/run_trading_peer.py 0|1|2` |
+| Raft peers | 60051 / 60052 / 60053 | same peer processes |
 | Insight | 50070 | `python scripts/run_llm.py` |
 | vLLM | ngrok | teammate’s host |
+
+---
+
+## Raft cluster (M2)
+
+**Three peers:** run `run_trading_peer.py` with `0`, `1`, and `2` in separate terminals. Each peer stores:
+
+- `data/runtime/state-peer{N}.json` — market engine snapshot  
+- `data/runtime/raft-peer{N}.json` — Raft term + log  
+
+**Writes (orders, admin reset)** go through the **Raft leader**. Followers return `NOT_LEADER;trading=host:port`. The interactive CLI re-logins on the leader and retries.
+
+**Reads** (`Get` portfolio, book, trades, admin views) work on any peer once it has applied committed entries.
+
+**Kill-leader demo:** see [scripts/demo_raft_kill_leader.md](scripts/demo_raft_kill_leader.md).
+
+Single-node dev (no Raft): `run_trading_server.py` (`RAFT_ENABLED=0` default).
 
 ---
 

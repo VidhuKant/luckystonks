@@ -10,7 +10,7 @@ import grpc
 from luckystonks.matching.models import Command
 from luckystonks.pb import raft_pb2
 
-from .codec import encode_command
+from .codec import encode_admin_reset, encode_command
 from .log_entry import LogEntry
 from .peers import PeerRegistry
 
@@ -76,6 +76,49 @@ class RaftRuntime:
             prev_index = self.node.last_log_index()
             prev_term = self.node.last_log_term()
             entry = LogEntry(term, encode_command(command))
+            new_index = prev_index + 1
+            self.node.log.append(entry)
+
+            successes = 1
+            for pid in self.peers.peer_ids():
+                if pid == self.node.peer_id:
+                    continue
+                reply = self._rpc_append_entries(
+                    pid,
+                    term=term,
+                    prev_index=prev_index,
+                    prev_term=prev_term,
+                    leader_commit=0,
+                    entries=[entry],
+                )
+                if reply is not None and reply.entry_appended:
+                    successes += 1
+
+            if successes <= len(self.peers.peer_ids()) // 2:
+                self.node.log.pop()
+                return False
+
+            for pid in self.peers.peer_ids():
+                self._rpc_append_entries(
+                    pid,
+                    term=term,
+                    prev_index=new_index,
+                    prev_term=term,
+                    leader_commit=new_index,
+                    entries=[],
+                )
+            self.node.commit_index = new_index
+            self.node._apply_committed()
+            return True
+
+    def replicate_admin_reset(self, seed_path: str) -> bool:
+        with self.lock:
+            if self.node.role != "leader":
+                return False
+            term = self.node.current_term
+            prev_index = self.node.last_log_index()
+            prev_term = self.node.last_log_term()
+            entry = LogEntry(term, encode_admin_reset(seed_path))
             new_index = prev_index + 1
             self.node.log.append(entry)
 
