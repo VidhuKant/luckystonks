@@ -38,6 +38,16 @@ def logout(stub: Any, token: str) -> None:
         raise RuntimeError("logout failed")
 
 
+def parse_not_leader_trading(detail: str) -> tuple[str, int] | None:
+    if not detail.startswith("NOT_LEADER;trading="):
+        return None
+    addr = detail.split("=", 1)[1].strip()
+    if ":" not in addr:
+        return None
+    host, port_s = addr.rsplit(":", 1)
+    return host, int(port_s)
+
+
 def post(stub: Any, token: str, post_type: str, data: bytes) -> tuple[str, str]:
     reply = stub.Post(
         trading_pb2.PostRequest(token=token, type=post_type, data=data), timeout=5
@@ -45,6 +55,36 @@ def post(stub: Any, token: str, post_type: str, data: bytes) -> tuple[str, str]:
     if reply.status == "ERR":
         raise RuntimeError(reply.detail)
     return reply.status, reply.detail
+
+
+def post_cluster(
+    stub: Any,
+    token: str,
+    post_type: str,
+    data: bytes,
+    *,
+    host: str,
+    port: int,
+    username: str | None = None,
+    password: str | None = None,
+) -> tuple[str, str, Any, str]:
+    reply = stub.Post(
+        trading_pb2.PostRequest(token=token, type=post_type, data=data), timeout=5
+    )
+    if reply.status != "ERR":
+        return reply.status, reply.detail, stub, token
+    target = parse_not_leader_trading(reply.detail)
+    if target is None or username is None or password is None:
+        raise RuntimeError(reply.detail)
+    leader_host, leader_port = target
+    leader_stub = connect(leader_host, leader_port)
+    session = login(leader_stub, username, password)
+    retry = leader_stub.Post(
+        trading_pb2.PostRequest(token=session.token, type=post_type, data=data), timeout=5
+    )
+    if retry.status == "ERR":
+        raise RuntimeError(retry.detail)
+    return retry.status, retry.detail, leader_stub, session.token
 
 
 def get(stub: Any, token: str, get_type: str, params: str = "") -> list[dict[str, Any]]:
@@ -85,10 +125,29 @@ def run_demo(stub: Any) -> list[dict[str, Any]]:
 
 
 def submit_order(
-    stub: Any, username: str, password: str, side: str, symbol: str, price: int, qty: int
+    stub: Any,
+    username: str,
+    password: str,
+    side: str,
+    symbol: str,
+    price: int,
+    qty: int,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 50051,
 ) -> tuple[str, str]:
     session = login(stub, username, password)
-    return post(stub, session.token, "ORDER", _order_payload(side, symbol, price, qty))
+    status, detail, _, _ = post_cluster(
+        stub,
+        session.token,
+        "ORDER",
+        _order_payload(side, symbol, price, qty),
+        host=host,
+        port=port,
+        username=username,
+        password=password,
+    )
+    return status, detail
 
 
 def _prompt_int(label: str) -> int:
@@ -104,7 +163,7 @@ def _print_json(data: Any) -> None:
     print(json.dumps(data, indent=2))
 
 
-def run_interactive(stub: Any) -> None:
+def run_interactive(stub: Any, host: str = "127.0.0.1", port: int = 50051) -> None:
     while True:
         print("\n=== LuckyStonks Login ===")
         username = input("Username: ").strip()
@@ -114,6 +173,7 @@ def run_interactive(stub: Any) -> None:
         password = getpass.getpass("Password: ")
         try:
             session = login(stub, username, password)
+            active_token = session.token
         except RuntimeError as err:
             print(err)
             continue
@@ -137,40 +197,56 @@ def run_interactive(stub: Any) -> None:
 
             try:
                 if choice == "1":
-                    _print_json(get(stub, session.token, "PORTFOLIO"))
+                    _print_json(get(stub, active_token, "PORTFOLIO"))
                 elif choice == "2":
-                    _print_json(get(stub, session.token, "ORDERS"))
+                    _print_json(get(stub, active_token, "ORDERS"))
                 elif choice == "3":
                     symbol = input("Symbol (e.g. AAPL, empty=all): ").strip().upper()
-                    _print_json(get(stub, session.token, "BOOK", symbol))
+                    _print_json(get(stub, active_token, "BOOK", symbol))
                 elif choice == "4":
-                    _print_json(get(stub, session.token, "TRADES"))
+                    _print_json(get(stub, active_token, "TRADES"))
                 elif choice == "5":
                     side = input("Side BUY or SELL: ").strip().upper()
                     symbol = input("Symbol: ").strip().upper()
                     price = _prompt_int("Limit price")
                     qty = _prompt_int("Quantity")
-                    status, detail = post(
-                        stub, session.token, "ORDER", _order_payload(side, symbol, price, qty)
+                    status, detail, stub, active_token = post_cluster(
+                        stub,
+                        active_token,
+                        "ORDER",
+                        _order_payload(side, symbol, price, qty),
+                        host=host,
+                        port=port,
+                        username=username,
+                        password=password,
                     )
                     _print_json({"status": status, "detail": detail})
                 elif choice == "6" and session.role == "admin":
-                    _print_json(get(stub, session.token, "ADMIN_PORTFOLIOS"))
+                    _print_json(get(stub, active_token, "ADMIN_PORTFOLIOS"))
                 elif choice == "7" and session.role == "admin":
-                    _print_json(get(stub, session.token, "ORDER_LOG"))
+                    _print_json(get(stub, active_token, "ORDER_LOG"))
                 elif choice == "8" and session.role == "admin":
                     confirm = input("Type YES to reset entire market: ").strip()
                     if confirm == "YES":
-                        status, detail = post(stub, session.token, "ADMIN_RESET", b"{}")
+                        status, detail, stub, active_token = post_cluster(
+                            stub,
+                            active_token,
+                            "ADMIN_RESET",
+                            b"{}",
+                            host=host,
+                            port=port,
+                            username=username,
+                            password=password,
+                        )
                         _print_json({"status": status, "detail": detail})
                         print("All sessions cleared. Log in again.")
                         break
                 elif choice == "l":
-                    logout(stub, session.token)
+                    logout(stub, active_token)
                     print("Logged out.")
                     break
                 elif choice == "q":
-                    logout(stub, session.token)
+                    logout(stub, active_token)
                     print("Bye.")
                     return
                 else:
@@ -215,14 +291,22 @@ def main() -> None:
         print(json.dumps(run_demo(stub), indent=2))
     elif command == "order":
         status, detail = submit_order(
-            stub, args.username, args.password, args.side, args.symbol, args.price, args.qty
+            stub,
+            args.username,
+            args.password,
+            args.side,
+            args.symbol,
+            args.price,
+            args.qty,
+            host=args.host,
+            port=args.port,
         )
         print(json.dumps({"status": status, "detail": detail}))
     elif command == "view":
         session = login(stub, args.username, args.password)
         print(json.dumps(get(stub, session.token, args.type, args.symbol), indent=2))
     else:
-        run_interactive(stub)
+        run_interactive(stub, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

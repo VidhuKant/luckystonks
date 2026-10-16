@@ -29,6 +29,7 @@ class RaftRuntime:
         self.last_heartbeat_sent = 0.0
         self.heartbeat_interval = 0.1
         self.election_timeout_bounds = (0.25, 0.5)
+        self.known_leader_id: int | None = None
 
     def reset_election_timer(self) -> None:
         self.election_deadline = time.monotonic() + random.uniform(*self.election_timeout_bounds)
@@ -49,12 +50,23 @@ class RaftRuntime:
         with self.lock:
             return self.node.role == "leader"
 
-    def leader_trading_hint(self) -> str | None:
+    def note_leader(self, leader_id: int) -> None:
+        self.known_leader_id = leader_id
+
+    def trading_address(self, peer_id: int) -> str | None:
+        return self.peers.trading_addresses.get(peer_id)
+
+    def not_leader_detail(self) -> str:
         with self.lock:
-            if self.node.role != "leader":
-                return None
-        host = self.peers.addresses.get(self.node.peer_id, "")
-        return host
+            if self.node.role == "leader":
+                addr = self.trading_address(self.node.peer_id)
+                return f"NOT_LEADER;trading={addr or 'unknown'}"
+            leader_id = self.known_leader_id
+        if leader_id is not None:
+            addr = self.trading_address(leader_id)
+            if addr:
+                return f"NOT_LEADER;trading={addr}"
+        return "NOT_LEADER;trading=unknown"
 
     def replicate_command(self, command: Command) -> bool:
         with self.lock:

@@ -35,25 +35,37 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
     if bound_port == 0:
         raise RuntimeError(f"could not bind Trading server to {HOST}:{PORT}")
 
-    trading_pb2_grpc.add_TradingServicer_to_server(
-        LuckyStonksServicer(engine, insight_read_token=INSIGHT_READ_TOKEN, seed_file=SEED_FILE),
-        server,
-    )
-
+    raft_runtime = None
     if RAFT_ENABLED:
         from luckystonks.raft.node import RaftNode
-        from luckystonks.raft.peers import PeerRegistry, load_raft_peers_from_env
+        from luckystonks.raft.peers import (
+            PeerRegistry,
+            load_raft_peers_from_env,
+            load_trading_peers_from_env,
+        )
         from luckystonks.raft.runtime import RaftRuntime
         from luckystonks.raft.servicer import RaftGrpcServicer
 
         if raft_runtime is None:
-            peers = PeerRegistry(RAFT_PEER_ID, load_raft_peers_from_env())
+            raft_addrs = load_raft_peers_from_env()
+            trading_addrs = load_trading_peers_from_env(raft_addrs)
+            peers = PeerRegistry(RAFT_PEER_ID, raft_addrs, trading_addrs)
             raft_runtime = RaftRuntime(RaftNode(RAFT_PEER_ID, engine), peers)
             raft_runtime.start()
         raft_bound = server.add_insecure_port(f"{HOST}:{RAFT_PORT}")
         if raft_bound == 0:
             raise RuntimeError(f"could not bind Raft server to {HOST}:{RAFT_PORT}")
         raft_pb2_grpc.add_RaftServicer_to_server(RaftGrpcServicer(raft_runtime), server)
+
+    trading_pb2_grpc.add_TradingServicer_to_server(
+        LuckyStonksServicer(
+            engine,
+            insight_read_token=INSIGHT_READ_TOKEN,
+            seed_file=SEED_FILE,
+            raft_runtime=raft_runtime,
+        ),
+        server,
+    )
 
     server.start()
 

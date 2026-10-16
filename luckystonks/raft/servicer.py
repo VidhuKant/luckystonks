@@ -41,6 +41,8 @@ class RaftGrpcServicer(raft_pb2_grpc.RaftServicer):
                 entries=entries,
             )
             self.runtime.reset_election_timer()
+            if reply["entry_appended"] or len(entries) == 0:
+                self.runtime.note_leader(int(getattr(request, "from")))
         return raft_pb2.AppendEntriesReply(
             **{
                 "from": int(reply["from"]),

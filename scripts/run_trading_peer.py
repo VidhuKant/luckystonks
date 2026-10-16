@@ -27,6 +27,10 @@ def main() -> None:
         "0:60051,1:60052,2:60053",
     )
     os.environ.setdefault(
+        "TRADING_PEERS",
+        "0:50051,1:50052,2:50053",
+    )
+    os.environ.setdefault(
         "LUCKYSTONKS_STATE_FILE",
         str(_ROOT / "data" / "runtime" / f"state-peer{peer_id}.json"),
     )

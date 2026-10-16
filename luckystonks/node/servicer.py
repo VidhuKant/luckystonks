@@ -8,11 +8,12 @@ from luckystonks.pb import trading_pb2, trading_pb2_grpc
 ADMIN_GET_TYPES = frozenset({"ADMIN_PORTFOLIOS", "ORDER_LOG"})
 
 class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
-    def __init__(self, engine, insight_read_token: str, seed_file: str = ""):
+    def __init__(self, engine, insight_read_token: str, seed_file: str = "", raft_runtime=None):
         self.engine = engine
         self.sessions = {}
         self.insight_read_token = insight_read_token
         self.seed_file = seed_file
+        self.raft_runtime = raft_runtime
 
     def Login(self, request, context):
         user = self.engine.users.get(request.username)
@@ -44,12 +45,23 @@ class LuckyStonksServicer(trading_pb2_grpc.TradingServicer):
                 return trading_pb2.PostReply(status="ERR", detail="admin only")
             if not self.seed_file:
                 return trading_pb2.PostReply(status="ERR", detail="seed file not configured")
+            if self.raft_runtime is not None and not self.raft_runtime.is_leader():
+                return trading_pb2.PostReply(status="ERR", detail=self.raft_runtime.not_leader_detail())
             self.engine.reset_from_seed(self.seed_file)
             self.sessions.clear()
             return trading_pb2.PostReply(status="OK", detail="market reset to seed")
 
         try:
             command = self._parse_order(user_id, request)
+            if self.raft_runtime is not None:
+                if not self.raft_runtime.is_leader():
+                    return trading_pb2.PostReply(
+                        status="ERR", detail=self.raft_runtime.not_leader_detail()
+                    )
+                if not self.raft_runtime.replicate_command(command):
+                    return trading_pb2.PostReply(status="ERR", detail="replication failed")
+                res = self.engine.results_by_request[command.client_request_id]
+                return trading_pb2.PostReply(status=res.status, detail=res.message)
             res = self.engine.apply(command)
             return trading_pb2.PostReply(status=res.status, detail=res.message)
         except ValueError as err:

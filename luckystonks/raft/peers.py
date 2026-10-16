@@ -34,10 +34,28 @@ def load_raft_peers_from_env() -> dict[int, str]:
     return parse_raft_peers(spec, default_host=host)
 
 
+def load_trading_peers_from_env(raft_peers: dict[int, str] | None = None) -> dict[int, str]:
+    spec = os.getenv("TRADING_PEERS", "")
+    host = os.getenv("TRADING_HOST", os.getenv("RAFT_HOST", "127.0.0.1"))
+    if spec:
+        return parse_raft_peers(spec, default_host=host)
+    raft_peers = raft_peers or load_raft_peers_from_env()
+    trading: dict[int, str] = {}
+    for pid in raft_peers:
+        trading[pid] = f"{host}:{50051 + pid}"
+    return trading
+
+
 class PeerRegistry:
-    def __init__(self, peer_id: int, addresses: dict[int, str]) -> None:
+    def __init__(
+        self,
+        peer_id: int,
+        addresses: dict[int, str],
+        trading_addresses: dict[int, str] | None = None,
+    ) -> None:
         self.peer_id = peer_id
         self.addresses = addresses
+        self.trading_addresses = trading_addresses or {}
         self._stubs: dict[int, raft_pb2_grpc.RaftStub] = {}
 
     def peer_ids(self) -> list[int]:
