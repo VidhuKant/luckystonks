@@ -73,6 +73,8 @@ class RaftRuntime:
             return self.node.role == "leader"
 
     def note_leader(self, leader_id: int) -> None:
+        if leader_id == self.node.peer_id and self.node.role != "leader":
+            return
         if self.known_leader_id != leader_id:
             self.log.debug("known leader updated peer=%s", leader_id)
         self.known_leader_id = leader_id
@@ -85,6 +87,7 @@ class RaftRuntime:
             self.node.current_term = new_term
         self.node.role = "follower"
         self.node.voted_for = None
+        self.known_leader_id = None
         self.reset_election_timer()
 
     def trading_address(self, peer_id: int) -> str | None:
@@ -92,12 +95,17 @@ class RaftRuntime:
 
     def not_leader_detail(self) -> str:
         with self.lock:
-            if self.node.role == "leader":
-                addr = self.trading_address(self.node.peer_id)
-                return f"NOT_LEADER;trading={addr or 'unknown'}"
             leader_id = self.known_leader_id
-        if leader_id is not None:
-            addr = self.trading_address(leader_id)
+            if leader_id is not None and leader_id == self.node.peer_id:
+                leader_id = None
+            if leader_id is not None:
+                addr = self.trading_address(leader_id)
+                if addr:
+                    return f"NOT_LEADER;trading={addr}"
+        for pid in sorted(self.peers.peer_ids()):
+            if pid == self.node.peer_id:
+                continue
+            addr = self.trading_address(pid)
             if addr:
                 return f"NOT_LEADER;trading={addr}"
         return "NOT_LEADER;trading=unknown"

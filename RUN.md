@@ -1,5 +1,42 @@
 # LuckyStonks — Run guide
 
+## Bloomberg-style web UI (one command)
+
+```bash
+bash scripts/run_demo_ui.sh
+```
+
+Open **http://127.0.0.1:8765/** — **Trade** (login, orders on **follower** port 50052 by default), **Operations** (cluster health, leader, logs, stop/start peers, parity check), and **Admin** (visible only when logged in as seed user `admin` / `admin`: all portfolios, order log, market reset, cluster membership).
+
+Verify APIs (stack must be running):
+
+```bash
+bash scripts/verify_ui.sh
+```
+
+Env: `UI_CLIENT_TRADING_PORT=50052`, `UI_WEB_PORT=8765`, `UI_START_INSIGHT=1`.
+
+**Stop** (from another terminal, or before re-running):
+
+```bash
+bash scripts/stop_demo_ui.sh
+```
+
+Or **Ctrl+C** in the terminal where `run_demo_ui.sh` is running. Re-running `run_demo_ui.sh` without stopping first also calls `stop_demo_ui.sh` automatically.
+
+**Persistence:** `run_demo_ui.sh` **does not** wipe cluster data on restart. Orders and portfolios are stored in `data/runtime/state-peer*.json` and `data/runtime/raft-peer*.json` and reload when peers start again.
+
+To reset the market to seed (empty trades, fresh users from seed file):
+
+```bash
+bash scripts/reset_demo_state.sh
+# or: UI_FRESH_CLUSTER=1 bash scripts/run_demo_ui.sh
+```
+
+Use **Admin → Reset market to seed** in the UI for a replicated reset without deleting local files manually.
+
+---
+
 ## One-time setup
 
 ```bash

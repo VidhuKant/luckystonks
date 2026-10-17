@@ -43,5 +43,7 @@ def get_insight_http(query: str, context: str = "") -> Any:
 
 
 def main() -> None:
-    """Run HTTP server on WEB_HOST:WEB_PORT (later)."""
-    raise NotImplementedError
+    """Run HTTP server (delegates to web.server)."""
+    from web.server import main as run
+
+    run()

@@ -13,7 +13,7 @@ The only 'Laxmi Chit Fund' you need !!!
 | Trading gRPC | `50051` |
 | Insight gRPC | `50070` |
 | vLLM HTTP (external) | `8000` or ngrok `/v1` |
-| Web HTTP (optional) | `8765` |
+| Web terminal UI | `8765` (`bash scripts/run_demo_ui.sh`) |
 
 Full steps: [RUN.md](RUN.md).
 

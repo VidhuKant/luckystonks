@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>luckystonks</title>
+    <link rel="stylesheet" href="/static/css/terminal.css" />
+  </head>
+  <body>
+    <header class="top-bar">
+      <div class="brand">luckystonks</div>
+      <nav class="nav-tabs">
+        <button type="button" id="tab-trade" class="active">Trade</button>
+        <button type="button" id="tab-ops">Operations</button>
+        <button type="button" id="tab-admin" class="hidden">Admin</button>
+      </nav>
+      <div style="display: flex; gap: 8px; align-items: center">
+        <span id="cluster-pill" class="status-pill">CLUSTER …</span>
+        <span id="user-pill" class="status-pill">NOT LOGGED IN</span>
+        <button type="button" id="logout-btn" style="background:#111;border:1px solid #444;color:#aaa;padding:2px 8px;cursor:pointer;font-size:10px">LOGOUT</button>
+      </div>
+    </header>
+
+    <section id="view-trade" class="view active">
+      <div id="login-wrap" class="login-wrap">
+        <div class="login-hero" aria-hidden="true">
+          <img src="/static/img/stonks.png" alt="luckystonks" class="login-hero-img" width="240" height="240" />
+        </div>
+        <form id="login-form" class="login-panel">
+          <h1>MARKET ACCESS</h1>
+          <p style="color:#666;margin:0;font-size:11px">Client session attaches to Raft follower (default peer 1).</p>
+          <label for="login-user">Username</label>
+          <input id="login-user" autocomplete="username" required />
+          <label for="login-pass">Password</label>
+          <input id="login-pass" type="password" autocomplete="current-password" required />
+          <button class="btn-primary" type="submit">Connect</button>
+          <div id="login-error" class="error-msg"></div>
+        </form>
+      </div>
+      <div id="trade-main" class="trade-grid hidden">
+        <div class="panel">
+          <div class="panel-head">Watchlist</div>
+          <div class="panel-body" id="watchlist"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">Order book · <span id="book-sym">RELIANCE</span></div>
+          <div class="panel-body" id="book-panel"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">Order ticket</div>
+          <div class="panel-body">
+            <form id="order-form" class="order-form">
+              <label>Side</label>
+              <select id="order-side">
+                <option value="BUY">BUY</option>
+                <option value="SELL">SELL</option>
+              </select>
+              <label>Symbol</label>
+              <input id="order-symbol" required />
+              <div class="row">
+                <div>
+                  <label>Limit price</label>
+                  <input id="order-price" type="number" min="1" required value="2450" />
+                </div>
+                <div>
+                  <label>Quantity</label>
+                  <input id="order-qty" type="number" min="1" required value="1" />
+                </div>
+              </div>
+              <button class="btn-primary" type="submit" style="margin-top:12px">Submit limit order</button>
+            </form>
+            <div style="margin-top:12px" id="orders-mini"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">Portfolio</div>
+          <div class="panel-body" id="portfolio-panel"></div>
+        </div>
+        <div class="panel tape-row">
+          <div class="panel-head">Trade tape</div>
+          <div class="panel-body" id="tape-panel"></div>
+        </div>
+        <div class="panel tape-row insight-box">
+          <div class="panel-head">Insight (gRPC :50070)</div>
+          <div class="panel-body">
+            <textarea id="insight-query" placeholder="Summarize recent market activity…"></textarea>
+            <button type="button" id="insight-btn" class="btn-primary" style="margin-top:6px;width:auto;padding:6px 16px">Ask Insight</button>
+            <div id="insight-answer" class="insight-answer"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-ops" class="view">
+      <div class="ops-toolbar">
+        <button type="button" id="refresh-ops">Refresh cluster</button>
+        <button type="button" id="parity-btn">Check TRADES parity</button>
+        <span style="color:#666;font-size:10px">Election-highlighted logs · Stop/Start peers for failover demo</span>
+      </div>
+      <div class="ops-grid">
+        <div class="peer-cards" id="peer-cards"></div>
+        <div class="ops-logs-triple" id="ops-logs-triple">
+          <div class="panel log-column" data-peer="0">
+            <div class="panel-head">Cluster logs · peer 0</div>
+            <div class="log-tabs">
+              <button type="button" class="active" data-peer="0" data-filter="all">All</button>
+              <button type="button" data-peer="0" data-filter="election">Elections</button>
+              <button type="button" data-peer="0" data-filter="general">General</button>
+            </div>
+            <div class="log-view" id="log-view-0"></div>
+          </div>
+          <div class="panel log-column" data-peer="1">
+            <div class="panel-head">Cluster logs · peer 1</div>
+            <div class="log-tabs">
+              <button type="button" class="active" data-peer="1" data-filter="all">All</button>
+              <button type="button" data-peer="1" data-filter="election">Elections</button>
+              <button type="button" data-peer="1" data-filter="general">General</button>
+            </div>
+            <div class="log-view" id="log-view-1"></div>
+          </div>
+          <div class="panel log-column" data-peer="2">
+            <div class="panel-head">Cluster logs · peer 2</div>
+            <div class="log-tabs">
+              <button type="button" class="active" data-peer="2" data-filter="all">All</button>
+              <button type="button" data-peer="2" data-filter="election">Elections</button>
+              <button type="button" data-peer="2" data-filter="general">General</button>
+            </div>
+            <div class="log-view" id="log-view-2"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-admin" class="view">
+      <div class="ops-toolbar">
+        <button type="button" id="refresh-admin">Refresh admin data</button>
+        <span style="color:#666;font-size:10px">Raft leader routes ADMIN_RESET and CLUSTER_CHANGE automatically</span>
+      </div>
+      <div class="admin-grid">
+        <div class="panel">
+          <div class="panel-head">All user portfolios</div>
+          <div class="panel-body" id="admin-portfolios-panel"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">Order log (audit trail)</div>
+          <div class="panel-body admin-scroll" id="admin-order-log-panel"></div>
+        </div>
+        <div class="panel admin-actions">
+          <div class="panel-head">Market reset</div>
+          <div class="panel-body">
+            <p style="color:#888;margin:0 0 8px;font-size:11px">
+              Replicates seed state to all peers and clears all trading sessions. You will be logged out.
+            </p>
+            <label for="admin-reset-confirm">Type YES to confirm</label>
+            <input id="admin-reset-confirm" autocomplete="off" placeholder="YES" />
+            <button type="button" id="admin-reset-btn" class="btn-danger" style="margin-top:10px">Reset market to seed</button>
+          </div>
+          <div class="panel-head" style="margin-top:12px;border-top:1px solid #222">Cluster membership</div>
+          <div class="panel-body">
+            <form id="admin-cluster-form" class="order-form">
+              <label>Action</label>
+              <select id="cluster-action">
+                <option value="add">add peer</option>
+                <option value="remove">remove peer</option>
+              </select>
+              <label>Peer ID</label>
+              <input id="cluster-peer-id" type="number" min="0" max="99" value="3" />
+              <label>Raft address (add only)</label>
+              <input id="cluster-raft-addr" placeholder="127.0.0.1:60053" />
+              <label>Trading address (add only)</label>
+              <input id="cluster-trading-addr" placeholder="127.0.0.1:50053" />
+              <button class="btn-primary" type="submit" style="margin-top:10px">Submit CLUSTER_CHANGE</button>
+            </form>
+            <div id="admin-cluster-result" style="margin-top:8px;font-family:var(--mono);font-size:10px;color:#888"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <script src="/static/js/terminal.js"></script>
+  </body>
+</html>
