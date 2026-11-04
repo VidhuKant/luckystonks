@@ -93,8 +93,120 @@ def complete_chat(messages: list[dict[str, Any]], model: str | None = None) -> s
     return answer.strip()
 
 
-def template_summary(tape: list[Any], query: str, _context: str) -> str:
+def _parse_context(context: str) -> dict[str, Any]:
+    if not context or not str(context).strip():
+        return {}
+    try:
+        raw = json.loads(context)
+    except (TypeError, json.JSONDecodeError):
+        return {"raw_context": str(context)}
+    return raw if isinstance(raw, dict) else {"raw_context": raw}
+
+
+def _format_portfolio(portfolio: Any) -> str:
+    if not isinstance(portfolio, dict):
+        return str(portfolio)
+    cash = portfolio.get("cash", "unknown")
+    shares = portfolio.get("shares") or {}
+    if isinstance(shares, dict) and shares:
+        holdings = ", ".join(f"{sym}={qty}" for sym, qty in sorted(shares.items()))
+    else:
+        holdings = "none"
+    return f"cash={cash}; holdings: {holdings}"
+
+
+def _other_user_mentioned(query: str, viewer_id: str, ctx: dict[str, Any]) -> str | None:
+    """Return another user_id referenced in the query, if any."""
+    q = query.lower()
+    candidates: set[str] = set()
+    for key in ("user_id",):
+        uid = ctx.get(key)
+        if isinstance(uid, str) and uid:
+            candidates.add(uid)
+    for row in ctx.get("all_portfolios") or []:
+        if isinstance(row, dict) and isinstance(row.get("user_id"), str):
+            candidates.add(row["user_id"])
+    # Common seed accounts even if all_portfolios is absent.
+    candidates.update({"ved", "pratham", "vidhu", "admin"})
+    for uid in sorted(candidates, key=len, reverse=True):
+        if uid == viewer_id:
+            continue
+        if uid.lower() in q:
+            return uid
+    return None
+
+
+def _portfolio_fallback(query: str, ctx: dict[str, Any]) -> str | None:
+    """Deterministic portfolio / ACL answers when vLLM is unavailable."""
+    if not ctx:
+        return None
+    q = query.lower()
+    portfolio_words = (
+        "portfolio",
+        "cash",
+        "holding",
+        "holdings",
+        "shares",
+        "balance",
+        "my account",
+        "open order",
+        "resting",
+    )
+    if not any(w in q for w in portfolio_words):
+        # Still handle explicit "X's portfolio" style asks.
+        if "portfolio" not in q and not _other_user_mentioned(query, str(ctx.get("user_id") or ""), ctx):
+            return None
+
+    viewer = str(ctx.get("user_id") or "")
+    role = str(ctx.get("role") or "user")
+    other = _other_user_mentioned(query, viewer, ctx)
+    if other:
+        if role == "admin":
+            for row in ctx.get("all_portfolios") or []:
+                if isinstance(row, dict) and row.get("user_id") == other:
+                    return (
+                        f"Admin view of {other}'s portfolio: {_format_portfolio(row)}. "
+                        f"Question: {query}"
+                    )
+            return (
+                f"Admin role is active, but no portfolio for '{other}' is in context. "
+                f"Question: {query}"
+            )
+        return (
+            f"Access denied: you are logged in as '{viewer}' and cannot view "
+            f"another user's portfolio ('{other}'). Question: {query}"
+        )
+
+    if not any(w in q for w in portfolio_words):
+        return None
+
+    parts: list[str] = []
+    if ctx.get("portfolio") is not None:
+        parts.append(f"Your portfolio ({viewer}): {_format_portfolio(ctx.get('portfolio'))}")
+    elif ctx.get("portfolio_error"):
+        parts.append(f"Your portfolio is unavailable ({ctx['portfolio_error']}).")
+    else:
+        parts.append("Your portfolio was not included in context.")
+
+    orders = ctx.get("open_orders") or []
+    if isinstance(orders, list):
+        parts.append(f"Open/resting orders: {len(orders)}.")
+    if role == "admin" and ctx.get("all_portfolios"):
+        parts.append(
+            f"Admin all-portfolios count: {len(ctx['all_portfolios'])} "
+            "(ask about a specific user_id for details)."
+        )
+    parts.append(f"Question: {query}")
+    return " ".join(parts)
+
+
+def template_summary(tape: list[Any], query: str, context: str) -> str:
     """Build a deterministic response when model inference is unavailable."""
+    ctx = _parse_context(context)
+    portfolio_answer = _portfolio_fallback(query, ctx)
+    if portfolio_answer is not None:
+        return portfolio_answer
+
     if not tape:
         return (
             "No live trades are available right now, so I cannot summarize market activity. "
@@ -123,10 +235,14 @@ def summarize(tape: list[Any], query: str, context: str) -> str:
                 "limit-order stock exchange. Answer in clear, professional language suitable for a "
                 "course demonstration or operations briefing.\n\n"
                 "Rules:\n"
-                "- Base every statement only on the trade tape JSON provided in the user message.\n"
-                "- If the tape is empty or lacks fields needed to answer, say so explicitly and "
-                "do not invent symbols, prices, quantities, or participants.\n"
-                "- Summarize patterns (symbols, volumes, prices) when asked; keep replies concise "
+                "- Use the trade tape JSON for market / recent-trade questions.\n"
+                "- Use additional_context (JSON) for the signed-in user's portfolio and open orders "
+                "when present. Never invent cash, shares, or orders.\n"
+                "- Privacy: additional_context.user_id is the signed-in user. If role is not "
+                "'admin', refuse requests for any other user's portfolio or balances. If role is "
+                "'admin', you may use additional_context.all_portfolios when present.\n"
+                "- If the tape/context lacks fields needed to answer, say so explicitly.\n"
+                "- Summarize patterns when asked; keep replies concise "
                 "(roughly three to eight sentences unless the user asks for more).\n"
                 "- Do not provide personalized investment advice, price predictions, or buy/sell "
                 "recommendations."
@@ -135,7 +251,11 @@ def summarize(tape: list[Any], query: str, context: str) -> str:
         {
             "role": "user",
             "content": json.dumps(
-                {"trade_tape": tape[-MAX_TAPE_ITEMS:], "question": query, "additional_context": context},
+                {
+                    "trade_tape": tape[-MAX_TAPE_ITEMS:],
+                    "question": query,
+                    "additional_context": _parse_context(context) or context,
+                },
                 ensure_ascii=False,
             ),
         },

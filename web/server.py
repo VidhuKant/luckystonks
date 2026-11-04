@@ -201,6 +201,37 @@ def _trade_get(sess: dict[str, Any], get_type: str, params: str = "") -> Any:
     return data
 
 
+def _first_item(data: Any) -> Any:
+    if isinstance(data, list):
+        return data[0] if data else None
+    return data
+
+
+def _build_insight_context(sess: dict[str, Any]) -> str:
+    """Attach ACL-scoped account data for Insight (own portfolio; all portfolios if admin)."""
+    ctx: dict[str, Any] = {
+        "user_id": sess.get("user_id") or sess.get("username"),
+        "role": sess.get("role") or "user",
+    }
+    try:
+        ctx["portfolio"] = _first_item(_trade_get(sess, "PORTFOLIO"))
+    except HTTPException as err:
+        ctx["portfolio"] = None
+        ctx["portfolio_error"] = err.detail
+    try:
+        ctx["open_orders"] = _trade_get(sess, "ORDERS") or []
+    except HTTPException as err:
+        ctx["open_orders"] = []
+        ctx["orders_error"] = err.detail
+    if ctx["role"] == "admin":
+        try:
+            ctx["all_portfolios"] = _trade_get(sess, "ADMIN_PORTFOLIOS") or []
+        except HTTPException as err:
+            ctx["all_portfolios"] = []
+            ctx["all_portfolios_error"] = err.detail
+    return json.dumps(ctx, ensure_ascii=False)
+
+
 @app.get("/api/trade/portfolio")
 def api_portfolio(request: Request) -> Any:
     return _trade_get(_require_session(request), "PORTFOLIO")
@@ -245,13 +276,14 @@ def api_order(body: OrderBody, request: Request) -> dict[str, Any]:
 
 @app.post("/api/trade/insight")
 def api_insight(body: InsightBody, request: Request) -> dict[str, str]:
-    _require_session(request)
+    sess = _require_session(request)
     query = body.query.strip()
     if not query:
         raise HTTPException(status_code=400, detail="query required")
+    context = _build_insight_context(sess)
     try:
         stub = connect_insight(INSIGHT_HOST, INSIGHT_PORT)
-        answer = get_insight(stub, query)
+        answer = get_insight(stub, query, context=context)
     except Exception as err:
         raise HTTPException(status_code=503, detail=f"insight unavailable: {err}") from err
     return {"answer": answer}
