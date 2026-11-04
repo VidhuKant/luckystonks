@@ -28,7 +28,13 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
     engine = engine or Engine()
     state_path = Path(STATE_FILE)
     engine.set_state_path(state_path)
-    if state_path.is_file():
+    # With Raft, engine durability lives in raft-peer*.json (snapshot + log).
+    # Loading state-peer*.json first can resurrect a divergent book after Ops
+    # Stop/Start while Raft indexes still look caught up.
+    if RAFT_ENABLED:
+        if not engine.users:
+            engine.load_seed_data(SEED_FILE)
+    elif state_path.is_file():
         engine.load_state(state_path)
     elif not engine.users:
         engine.load_seed_data(SEED_FILE)
@@ -75,12 +81,16 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
                 load_raft_state(raft_path, raft_node)
                 if raft_node.cluster_endpoints:
                     peers.sync_from_endpoints(raft_node.cluster_endpoints)
+                if not raft_node.snapshot_data:
+                    # No snapshot: indexes alone are not enough — rebuild from seed
+                    # and replay the full log (same approach as tests/raft/test_persist).
+                    raft_node.engine.reset_from_seed(SEED_FILE)
+                    raft_node.last_applied = 0
                 while raft_node.last_applied < raft_node.commit_index:
                     raft_node._apply_committed()
             raft_node.admin_reset_hooks.append(lambda: servicer.sessions.clear())
             active_raft = RaftRuntime(raft_node, peers)
             raft_node.config_change_hooks.append(active_raft._on_config_change)
-            active_raft.start()
             servicer.raft_runtime = active_raft
         raft_bound = server.add_insecure_port(f"{HOST}:{RAFT_PORT}")
         if raft_bound == 0:
@@ -89,9 +99,13 @@ def serve(engine: Engine | None = None, raft_runtime=None) -> None:
 
     trading_pb2_grpc.add_TradingServicer_to_server(servicer, server)
 
+    # Bind + start gRPC BEFORE the Raft election loop. Starting the runtime first
+    # caused peer-to-peer RequestVote UNAVAILABLE (client channels racing an
+    # unstarted server) and the cluster never elected a leader.
     server.start()
 
-    if RAFT_ENABLED:
+    if RAFT_ENABLED and active_raft is not None:
+        active_raft.start()
         startup_log.info(
             "LuckyStonks peer trading=%s:%s raft=%s:%s (initial role=%s; watch logs for elections)",
             HOST,

@@ -95,39 +95,11 @@
       <div class="ops-toolbar">
         <button type="button" id="refresh-ops">Refresh cluster</button>
         <button type="button" id="parity-btn">Check TRADES parity</button>
-        <span style="color:#666;font-size:10px">Election-highlighted logs · Stop/Start peers for failover demo</span>
+        <span id="ops-cluster-meta" class="ops-meta">Raft paper metrics · failover demo</span>
       </div>
-      <div class="ops-grid">
+      <div class="ops-layout">
         <div class="peer-cards" id="peer-cards"></div>
-        <div class="ops-logs-triple" id="ops-logs-triple">
-          <div class="panel log-column" data-peer="0">
-            <div class="panel-head">Cluster logs · peer 0</div>
-            <div class="log-tabs">
-              <button type="button" class="active" data-peer="0" data-filter="all">All</button>
-              <button type="button" data-peer="0" data-filter="election">Elections</button>
-              <button type="button" data-peer="0" data-filter="general">General</button>
-            </div>
-            <div class="log-view" id="log-view-0"></div>
-          </div>
-          <div class="panel log-column" data-peer="1">
-            <div class="panel-head">Cluster logs · peer 1</div>
-            <div class="log-tabs">
-              <button type="button" class="active" data-peer="1" data-filter="all">All</button>
-              <button type="button" data-peer="1" data-filter="election">Elections</button>
-              <button type="button" data-peer="1" data-filter="general">General</button>
-            </div>
-            <div class="log-view" id="log-view-1"></div>
-          </div>
-          <div class="panel log-column" data-peer="2">
-            <div class="panel-head">Cluster logs · peer 2</div>
-            <div class="log-tabs">
-              <button type="button" class="active" data-peer="2" data-filter="all">All</button>
-              <button type="button" data-peer="2" data-filter="election">Elections</button>
-              <button type="button" data-peer="2" data-filter="general">General</button>
-            </div>
-            <div class="log-view" id="log-view-2"></div>
-          </div>
-        </div>
+        <div class="ops-logs-grid" id="ops-logs-grid"></div>
       </div>
     </section>
 

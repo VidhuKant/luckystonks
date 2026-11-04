@@ -2,13 +2,13 @@ const WATCH = ["RELIANCE", "TCS", "INFY", "WIPRO", "HDFCBANK", "TATAMOTORS", "BH
 let selectedSymbol = "RELIANCE";
 let me = null;
 let clusterCache = null;
-const PEER_LOG_IDS = [0, 1, 2];
-const logPeerState = {
-  0: { filter: "all", entries: [] },
-  1: { filter: "all", entries: [] },
-  2: { filter: "all", entries: [] },
-};
-const logSockets = { 0: null, 1: null, 2: null };
+let PEER_LOG_IDS = [];
+const logPeerState = {};
+const logSockets = {};
+
+function dash(v) {
+  return v === null || v === undefined || v === "" ? "—" : v;
+}
 
 function $(id) {
   return document.getElementById(id);
@@ -298,16 +298,67 @@ async function askInsight() {
   }
 }
 
+function ensureOpsLogColumns(size) {
+  const grid = $("ops-logs-grid");
+  if (!grid) return;
+  const ids = Array.from({ length: size }, (_, i) => i);
+  const same =
+    PEER_LOG_IDS.length === ids.length && PEER_LOG_IDS.every((v, i) => v === ids[i]);
+  if (same && grid.children.length === size) return;
+  disconnectAllLogWs();
+  opsLogsBootstrapped = false;
+  PEER_LOG_IDS = ids;
+  ids.forEach((pid) => {
+    if (!logPeerState[pid]) logPeerState[pid] = { filter: "all", entries: [] };
+    logSockets[pid] = null;
+  });
+  Object.keys(logPeerState).forEach((k) => {
+    if (!ids.includes(Number(k))) delete logPeerState[k];
+  });
+  grid.innerHTML = ids
+    .map(
+      (pid) => `
+    <div class="panel log-column" data-peer="${pid}">
+      <div class="panel-head">Cluster logs · peer ${pid}</div>
+      <div class="log-tabs">
+        <button type="button" class="active" data-peer="${pid}" data-filter="all">All</button>
+        <button type="button" data-peer="${pid}" data-filter="election">Elections</button>
+        <button type="button" data-peer="${pid}" data-filter="general">General</button>
+      </div>
+      <div class="log-view" id="log-view-${pid}"></div>
+    </div>`
+    )
+    .join("");
+  grid.querySelectorAll(".log-tabs button").forEach((btn) => {
+    btn.onclick = () => {
+      const peerId = parseInt(btn.getAttribute("data-peer"), 10);
+      const filter = btn.getAttribute("data-filter");
+      const column = btn.closest(".log-column");
+      if (column) {
+        column.querySelectorAll(".log-tabs button").forEach((b) => b.classList.remove("active"));
+      }
+      btn.classList.add("active");
+      logPeerState[peerId].filter = filter;
+      renderLogLinesForPeer(peerId);
+    };
+  });
+}
+
 async function refreshClusterBadge() {
   try {
     clusterCache = await api("/api/ops/cluster");
+    ensureOpsLogColumns(clusterCache.cluster_size || (clusterCache.peers || []).length || 5);
     const leader = clusterCache.leader_peer_id;
     const pill = $("cluster-pill");
+    const meta = $("ops-cluster-meta");
+    if (meta) {
+      meta.textContent = `CLUSTER_SIZE=${clusterCache.cluster_size} · quorum ${clusterCache.quorum} · paper metrics · failover demo`;
+    }
     if (leader == null) {
-      pill.textContent = "CLUSTER · LEADER ELECTING…";
+      pill.textContent = `CLUSTER×${clusterCache.cluster_size} · LEADER ELECTING…`;
       pill.className = "status-pill";
     } else {
-      pill.textContent = `LEADER PEER ${leader} · CLIENT → PEER ${clusterCache.client_trading_port - 50051}`;
+      pill.textContent = `LEADER PEER ${leader} · N=${clusterCache.cluster_size} · CLIENT → :${clusterCache.client_trading_port}`;
       pill.className = "status-pill leader";
     }
   } catch {
@@ -315,31 +366,349 @@ async function refreshClusterBadge() {
   }
 }
 
+let timerTickHandle = null;
+let timerSoftRefreshHandle = null;
+let timerSoftRefreshInFlight = false;
+let timerSoftRefreshQueued = false;
+
+function formatTimerSeconds(sec) {
+  if (sec == null || Number.isNaN(sec)) return "—";
+  const s = Math.max(0, sec);
+  return s.toFixed(1) + "s";
+}
+
+function timerSnapshotFromPeer(p, fetchedAt) {
+  const raft = p.raft || {};
+  if (!(p.trading_up && p.raft_up)) {
+    return { mode: "down", deadline: null, remaining: null, total: 0, meta: "", label: "Election timer" };
+  }
+  if (p.role === "LEADER") {
+    const total = Number(raft.heartbeatIntervalSec) || 0.5;
+    let remaining = raft.heartbeatRemainingSec;
+    let deadline = raft.heartbeatDeadlineAt != null ? Number(raft.heartbeatDeadlineAt) : NaN;
+    if (!Number.isFinite(deadline) && remaining != null) {
+      deadline = fetchedAt + Math.max(0, Number(remaining) || 0);
+    }
+    if (remaining == null && Number.isFinite(deadline)) {
+      remaining = deadline - fetchedAt;
+    }
+    remaining = Math.max(0, Number(remaining) || 0);
+    if (!Number.isFinite(deadline)) deadline = fetchedAt + remaining;
+    return {
+      mode: "heartbeat",
+      deadline,
+      remaining,
+      total,
+      meta: `every ${formatTimerSeconds(total)}`,
+      label: "Heartbeat",
+    };
+  }
+  const drawn = Number(raft.electionTimeoutSec);
+  const lo = raft.electionTimeoutMin ?? 3;
+  const hi = raft.electionTimeoutMax ?? 5;
+  const total = Number.isFinite(drawn) && drawn > 0 ? drawn : hi;
+  let remaining = raft.electionRemainingSec;
+  let deadline = raft.electionDeadlineAt != null ? Number(raft.electionDeadlineAt) : NaN;
+  if (!Number.isFinite(deadline) && remaining != null) {
+    deadline = fetchedAt + Math.max(0, Number(remaining) || 0);
+  }
+  if (remaining == null && Number.isFinite(deadline)) {
+    remaining = deadline - fetchedAt;
+  }
+  remaining = Math.max(0, Number(remaining) || 0);
+  if (!Number.isFinite(deadline)) deadline = fetchedAt + remaining;
+  return {
+    mode: "election",
+    deadline,
+    remaining,
+    total,
+    meta: `drawn ${formatTimerSeconds(drawn)} · range ${lo}–${hi}s`,
+    label: "Election timeout",
+  };
+}
+
+function timerRemainingFromEl(el, now) {
+  // Prefer absolute wall deadline so slow API fetches don't skew the countdown.
+  const deadline = parseFloat(el.getAttribute("data-deadline"));
+  if (Number.isFinite(deadline)) return deadline - now;
+  const rem0 = parseFloat(el.getAttribute("data-remaining"));
+  const fetchedAt = parseFloat(el.getAttribute("data-fetched-at"));
+  if (Number.isFinite(rem0) && Number.isFinite(fetchedAt)) {
+    return rem0 - (now - fetchedAt);
+  }
+  return NaN;
+}
+
+function applyTimerEl(el, snap, fetchedAt) {
+  if (!el || !snap || snap.mode === "down") return;
+  el.setAttribute("data-mode", snap.mode);
+  el.setAttribute("data-deadline", String(snap.deadline));
+  el.setAttribute("data-remaining", String(snap.remaining));
+  el.setAttribute("data-fetched-at", String(fetchedAt));
+  el.setAttribute("data-total", String(snap.total));
+  el.classList.toggle("leader", snap.mode === "heartbeat");
+  const meta = el.querySelector(".peer-timer-meta");
+  if (meta) meta.textContent = snap.meta;
+  const label = el.querySelector(".peer-timer-label");
+  if (label) label.textContent = snap.label;
+}
+
+function patchPeerTimersFromCluster(data) {
+  const fetchedAt = Date.now() / 1000;
+  let patched = 0;
+  (data.peers || []).forEach((p) => {
+    const card = document.querySelector(`.peer-card[data-peer-id="${p.peer_id}"]`);
+    if (!card) return;
+    const el = card.querySelector(".peer-timer");
+    if (!el || el.classList.contains("down")) return;
+    const snap = timerSnapshotFromPeer(p, fetchedAt);
+    if (snap.mode === "down") return;
+    // Role/mode mismatch (leader↔follower) needs a full card rebuild.
+    const curMode = el.getAttribute("data-mode");
+    if (curMode && curMode !== snap.mode) return;
+    applyTimerEl(el, snap, fetchedAt);
+    patched += 1;
+  });
+  if (patched) tickPeerTimers();
+  return patched;
+}
+
+function scheduleTimerSoftRefresh() {
+  if (timerSoftRefreshHandle || timerSoftRefreshInFlight) {
+    timerSoftRefreshQueued = true;
+    return;
+  }
+  if (!$("view-ops") || !$("view-ops").classList.contains("active")) return;
+  timerSoftRefreshHandle = setTimeout(async () => {
+    timerSoftRefreshHandle = null;
+    if (timerSoftRefreshInFlight) {
+      timerSoftRefreshQueued = true;
+      return;
+    }
+    timerSoftRefreshInFlight = true;
+    timerSoftRefreshQueued = false;
+    try {
+      const data = await api("/api/ops/cluster");
+      clusterCache = data;
+      // Patch deadlines in place — full rebuild only on role/UP changes.
+      if (peerCardsNeedRebuild(data)) renderPeerCards(data);
+      else patchPeerTimersFromCluster(data);
+    } catch {
+      /* ignore transient */
+    } finally {
+      timerSoftRefreshInFlight = false;
+      if (timerSoftRefreshQueued) scheduleTimerSoftRefresh();
+    }
+  }, 250);
+}
+
+function tickPeerTimers() {
+  const now = Date.now() / 1000;
+  let needRefresh = false;
+  document.querySelectorAll(".peer-timer[data-mode]").forEach((el) => {
+    if (el.classList.contains("down")) return;
+    const total = parseFloat(el.getAttribute("data-total") || "0");
+    const mode = el.getAttribute("data-mode") || "election";
+    let remaining = timerRemainingFromEl(el, now);
+    if (!Number.isFinite(remaining)) return;
+
+    const valueEl = el.querySelector(".peer-timer-value");
+    const fillEl = el.querySelector(".peer-timer-fill");
+
+    if (remaining <= 0) {
+      needRefresh = true;
+      if (valueEl) {
+        valueEl.textContent = mode === "heartbeat" ? "sending…" : "sync…";
+      }
+      if (fillEl && total > 0) {
+        fillEl.style.width = "100%";
+        fillEl.classList.remove("empty", "urgent");
+        fillEl.classList.add("syncing");
+      }
+      el.classList.remove("expired");
+      el.classList.add("syncing");
+      return;
+    }
+
+    el.classList.remove("syncing", "expired");
+    if (valueEl) valueEl.textContent = formatTimerSeconds(remaining);
+    if (fillEl && total > 0) {
+      const pct = Math.max(0, Math.min(100, (remaining / total) * 100));
+      fillEl.style.width = pct + "%";
+      fillEl.classList.remove("empty", "syncing");
+      fillEl.classList.toggle("urgent", remaining < 1.0);
+    }
+  });
+  if (needRefresh) scheduleTimerSoftRefresh();
+}
+
+function startPeerTimerTicks() {
+  if (timerTickHandle) return;
+  timerTickHandle = setInterval(tickPeerTimers, 100);
+}
+
+function renderTimerPanel(p, raft) {
+  const fetchedAt = Date.now() / 1000;
+  const snap = timerSnapshotFromPeer(p, fetchedAt);
+  if (snap.mode === "down") {
+    return `<div class="peer-timer down"><div class="peer-timer-label">Election timer</div><div class="peer-timer-value">OFFLINE</div></div>`;
+  }
+  const cls = snap.mode === "heartbeat" ? "peer-timer leader" : "peer-timer";
+  const pct = snap.total ? Math.min(100, (snap.remaining / snap.total) * 100) : 0;
+  return `
+    <div class="${cls}" data-mode="${snap.mode}" data-deadline="${snap.deadline}" data-remaining="${snap.remaining}" data-fetched-at="${fetchedAt}" data-total="${snap.total}">
+      <div class="peer-timer-head">
+        <span class="peer-timer-label">${snap.label}</span>
+        <span class="peer-timer-meta">${snap.meta}</span>
+      </div>
+      <div class="peer-timer-value">${formatTimerSeconds(snap.remaining)}</div>
+      <div class="peer-timer-bar"><div class="peer-timer-fill" style="width:${pct}%"></div></div>
+    </div>`;
+}
+
+function renderFollowerTables(raft) {
+  if (!raft || (!raft.nextIndex && !raft.matchIndex)) return "";
+  const next = raft.nextIndex || {};
+  const match = raft.matchIndex || {};
+  const keys = Array.from(
+    new Set([...Object.keys(next), ...Object.keys(match)])
+  ).sort((a, b) => Number(a) - Number(b));
+  if (!keys.length) return "";
+  const rows = keys
+    .map(
+      (k) =>
+        `<tr><td>peer ${k}</td><td class="val">${dash(next[k])}</td><td class="val">${dash(match[k])}</td></tr>`
+    )
+    .join("");
+  return `
+    <div class="peer-section-label">Leader tracking (Fig. 2)</div>
+    <table class="follower-table">
+      <thead><tr><th>Follower</th><th>nextIndex</th><th>matchIndex</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function peerCardsNeedRebuild(data) {
+  const wrap = $("peer-cards");
+  if (!wrap) return true;
+  const peers = data.peers || [];
+  const existing = [...wrap.querySelectorAll(".peer-card[data-peer-id]")];
+  if (existing.length !== peers.length) return true;
+  for (let i = 0; i < peers.length; i++) {
+    const p = peers[i];
+    const card = existing[i];
+    if (!card || card.getAttribute("data-peer-id") !== String(p.peer_id)) return true;
+    if (card.getAttribute("data-role") !== String(p.role || "")) return true;
+    const up = !!(p.trading_up && p.raft_up);
+    if (card.classList.contains("down") === up) return true;
+  }
+  return false;
+}
+
+function patchPeerCardsMetrics(data) {
+  (data.peers || []).forEach((p) => {
+    const card = document.querySelector(`.peer-card[data-peer-id="${p.peer_id}"]`);
+    if (!card) return;
+    const raft = p.raft || {};
+    const up = !!(p.trading_up && p.raft_up);
+    const setVal = (label, text) => {
+      const rows = card.querySelectorAll(".metric-row");
+      for (const row of rows) {
+        const span = row.querySelector(":scope > span:first-child");
+        if (span && span.textContent === label) {
+          const val = row.querySelector(".val");
+          if (val) val.textContent = text;
+          return;
+        }
+      }
+    };
+    setVal("Trading", `:${p.trading_port} ${p.trading_up ? "UP" : "DOWN"}`);
+    setVal("Raft RPC", `:${p.raft_port} ${p.raft_up ? "UP" : "DOWN"}`);
+    setVal("currentTerm", String(dash(raft.currentTerm ?? p.term)));
+    setVal("votedFor", String(dash(raft.votedFor)));
+    setVal("commitIndex", String(dash(raft.commitIndex ?? p.commit_index)));
+    setVal("lastApplied", String(dash(raft.lastApplied)));
+    setVal("lastLogIndex", String(dash(raft.lastLogIndex)));
+    setVal("lastLogTerm", String(dash(raft.lastLogTerm)));
+    setVal("logLen", String(dash(raft.logLen ?? p.log_len)));
+    setVal("snapshotIdx", String(dash(raft.snapshotLastIncludedIndex ?? p.snapshot_index)));
+    setVal("PID", String(dash(p.pid)));
+    const stopBtn = card.querySelector("[data-stop]");
+    const startBtn = card.querySelector("[data-start]");
+    if (stopBtn) stopBtn.disabled = !up;
+    if (startBtn) startBtn.disabled = up;
+    if (p.role === "LEADER") {
+      const actions = card.querySelector(".ops-actions");
+      const html = renderFollowerTables(raft);
+      card.querySelectorAll(".peer-section-label").forEach((el) => {
+        if (el.textContent.includes("Leader tracking")) {
+          const table = el.nextElementSibling;
+          el.remove();
+          if (table && table.classList.contains("follower-table")) table.remove();
+        }
+      });
+      card.querySelectorAll(".follower-table").forEach((el) => el.remove());
+      if (html && actions) {
+        const tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        while (tmp.firstChild) actions.parentNode.insertBefore(tmp.firstChild, actions);
+      }
+    }
+  });
+  patchPeerTimersFromCluster(data);
+}
+
 function renderPeerCards(data) {
   const wrap = $("peer-cards");
   wrap.innerHTML = "";
   (data.peers || []).forEach((p) => {
+    const raft = p.raft || {};
+    const up = !!(p.trading_up && p.raft_up);
     const card = document.createElement("div");
     card.className = "peer-card";
+    card.setAttribute("data-peer-id", String(p.peer_id));
+    card.setAttribute("data-role", String(p.role || ""));
     if (p.role === "LEADER") card.classList.add("leader");
-    if (!p.trading_up || !p.raft_up) card.classList.add("down");
+    if (!up) card.classList.add("down");
+    const roleClass =
+      p.role === "LEADER"
+        ? "leader"
+        : p.role === "FOLLOWER"
+          ? "follower"
+          : p.role === "CANDIDATE"
+            ? "follower"
+            : "down";
+    const stopDisabled = up ? "" : "disabled";
+    const startDisabled = up ? "disabled" : "";
     card.innerHTML = `
       <div class="peer-title">
         <strong>PEER ${p.peer_id}</strong>
-        <span class="status-pill ${p.role === "LEADER" ? "leader" : p.role === "FOLLOWER" ? "follower" : "down"}">${p.role}</span>
+        <span class="status-pill ${roleClass}">${p.role}</span>
       </div>
-      <div class="metric-row"><span>Trading</span><span class="val">:${p.trading_port} ${p.trading_up ? "UP" : "DOWN"}</span></div>
-      <div class="metric-row"><span>Raft</span><span class="val">:${p.raft_port} ${p.raft_up ? "UP" : "DOWN"}</span></div>
-      <div class="metric-row"><span>Term / Commit</span><span class="val">${p.term ?? "—"} / ${p.commit_index ?? "—"}</span></div>
-      <div class="metric-row"><span>Log / Snap</span><span class="val">${p.log_len ?? "—"} / ${p.snapshot_index ?? 0}</span></div>
-      <div class="metric-row"><span>PID</span><span class="val">${p.pid ?? "—"}</span></div>
+      ${renderTimerPanel(p, raft)}
+      <div class="metric-grid">
+        <div class="metric-row"><span>Trading</span><span class="val">:${p.trading_port} ${p.trading_up ? "UP" : "DOWN"}</span></div>
+        <div class="metric-row"><span>Raft RPC</span><span class="val">:${p.raft_port} ${p.raft_up ? "UP" : "DOWN"}</span></div>
+        <div class="metric-row"><span>currentTerm</span><span class="val">${dash(raft.currentTerm ?? p.term)}</span></div>
+        <div class="metric-row"><span>votedFor</span><span class="val">${dash(raft.votedFor)}</span></div>
+        <div class="metric-row"><span>commitIndex</span><span class="val">${dash(raft.commitIndex ?? p.commit_index)}</span></div>
+        <div class="metric-row"><span>lastApplied</span><span class="val">${dash(raft.lastApplied)}</span></div>
+        <div class="metric-row"><span>lastLogIndex</span><span class="val">${dash(raft.lastLogIndex)}</span></div>
+        <div class="metric-row"><span>lastLogTerm</span><span class="val">${dash(raft.lastLogTerm)}</span></div>
+        <div class="metric-row"><span>logLen</span><span class="val">${dash(raft.logLen ?? p.log_len)}</span></div>
+        <div class="metric-row"><span>snapshotIdx</span><span class="val">${dash(raft.snapshotLastIncludedIndex ?? p.snapshot_index)}</span></div>
+        <div class="metric-row span-2"><span>PID</span><span class="val">${dash(p.pid)}</span></div>
+      </div>
+      ${p.role === "LEADER" ? renderFollowerTables(raft) : ""}
       <div class="ops-actions">
         <button type="button" data-log="${p.peer_id}">Logs</button>
-        <button type="button" class="danger" data-stop="${p.peer_id}">Stop</button>
-        <button type="button" data-start="${p.peer_id}">Start</button>
+        <button type="button" class="danger" data-stop="${p.peer_id}" ${stopDisabled}>Stop</button>
+        <button type="button" data-start="${p.peer_id}" ${startDisabled}>Start</button>
       </div>`;
     wrap.appendChild(card);
   });
+  startPeerTimerTicks();
+  tickPeerTimers();
   wrap.querySelectorAll("[data-log]").forEach((btn) => {
     btn.onclick = () => {
       const pid = btn.getAttribute("data-log");
@@ -412,8 +781,16 @@ async function loadAllLogSnapshots() {
 }
 
 function connectLogWs(peerId) {
-  if (logSockets[peerId]) {
-    logSockets[peerId].close();
+  const existing = logSockets[peerId];
+  if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  if (existing) {
+    try {
+      existing.close();
+    } catch {
+      /* ignore */
+    }
     logSockets[peerId] = null;
   }
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -454,12 +831,29 @@ function disconnectAllLogWs() {
   });
 }
 
+let opsLogsBootstrapped = false;
+
 async function refreshOps() {
   try {
     const data = await api("/api/ops/cluster");
     clusterCache = data;
-    renderPeerCards(data);
-    await loadAllLogSnapshots();
+    ensureOpsLogColumns(data.cluster_size || (data.peers || []).length || 5);
+    const meta = $("ops-cluster-meta");
+    if (meta) {
+      meta.textContent = `CLUSTER_SIZE=${data.cluster_size} · quorum ${data.quorum} · paper metrics · failover demo`;
+    }
+    if (peerCardsNeedRebuild(data)) {
+      renderPeerCards(data);
+    } else {
+      patchPeerCardsMetrics(data);
+    }
+    // Bootstrap logs once; live updates come from WebSockets. Re-fetching +
+    // reconnecting every 1s flooded the server and froze the Ops tab.
+    if (!opsLogsBootstrapped) {
+      await loadAllLogSnapshots();
+      opsLogsBootstrapped = true;
+    }
+    if ($("view-ops").classList.contains("active")) connectAllLogWs();
   } catch (err) {
     showToast(`Refresh failed: ${err.message}`, true);
   }
@@ -541,6 +935,18 @@ function syncClusterAddrDefaults() {
     $("cluster-raft-addr").value = `127.0.0.1:${60051 + peerId}`;
     $("cluster-trading-addr").value = `127.0.0.1:${50051 + peerId}`;
   }
+  const size = (clusterCache && clusterCache.cluster_size) || 5;
+  if (!$("cluster-peer-id").dataset.touched) {
+    $("cluster-peer-id").value = String(size);
+  }
+}
+
+function setDefaultClusterPeerId() {
+  const size = (clusterCache && clusterCache.cluster_size) || 5;
+  if ($("cluster-peer-id") && !$("cluster-peer-id").dataset.touched) {
+    $("cluster-peer-id").value = String(size);
+    syncClusterAddrDefaults();
+  }
 }
 
 async function submitClusterChange(e) {
@@ -580,30 +986,22 @@ function init() {
   $("parity-btn").onclick = checkParity;
   $("admin-reset-btn").onclick = adminResetMarket;
   $("admin-cluster-form").addEventListener("submit", submitClusterChange);
-  $("cluster-peer-id").addEventListener("change", syncClusterAddrDefaults);
+  $("cluster-peer-id").addEventListener("change", () => {
+    $("cluster-peer-id").dataset.touched = "1";
+    syncClusterAddrDefaults();
+  });
   $("cluster-action").addEventListener("change", syncClusterAddrDefaults);
   syncClusterAddrDefaults();
-  document.querySelectorAll(".log-tabs button").forEach((btn) => {
-    btn.onclick = () => {
-      const peerId = parseInt(btn.getAttribute("data-peer"), 10);
-      const filter = btn.getAttribute("data-filter");
-      const column = btn.closest(".log-column");
-      if (column) {
-        column.querySelectorAll(".log-tabs button").forEach((b) => b.classList.remove("active"));
-      }
-      btn.classList.add("active");
-      logPeerState[peerId].filter = filter;
-      renderLogLinesForPeer(peerId);
-    };
-  });
   tryRestoreSession();
+  refreshClusterBadge().then(() => setDefaultClusterPeerId());
   setInterval(refreshClusterBadge, 2000);
   setInterval(() => {
     if (me && $("view-trade").classList.contains("active")) refreshTrade();
   }, 8000);
   setInterval(() => {
     if ($("view-ops").classList.contains("active")) refreshOps();
-  }, 4000);
+  }, 1000);
+  startPeerTimerTicks();
   setInterval(() => {
     if ($("view-admin").classList.contains("active") && isAdminUser()) refreshAdmin();
   }, 8000);

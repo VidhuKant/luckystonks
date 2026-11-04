@@ -25,14 +25,17 @@ from web.grpc_client import (  # noqa: E402
     connect_insight,
     connect_trading,
     get_data,
+    get_data_resilient,
     get_insight,
     login,
     logout,
     order_payload,
     post_cluster,
     post_order_cluster,
+    probe_port_listening,
     probe_trading_port,
 )
+from luckystonks.cluster_size import BASE_TRADING_PORT, cluster_size, peer_ids  # noqa: E402
 from web.ops_state import (  # noqa: E402
     build_cluster_status,
     classify_log_line,
@@ -80,10 +83,12 @@ def _leader_port_hint() -> int | None:
     alive = {
         p["peer_id"]
         for p in default_peers(TRADING_HOST)
-        if probe_trading_port(TRADING_HOST, p["trading_port"])
+        if probe_port_listening(TRADING_HOST, p["trading_port"])
     }
-    leader_id = infer_leader_from_logs(LOG_DIR, [0, 1, 2], alive_peer_ids=alive or None)
-    return (50051 + leader_id) if leader_id is not None else None
+    leader_id = infer_leader_from_logs(
+        LOG_DIR, peer_ids(), alive_peer_ids=alive or None
+    )
+    return (BASE_TRADING_PORT + leader_id) if leader_id is not None else None
 
 
 def _stub_for_session(sess: dict[str, Any]):
@@ -91,7 +96,11 @@ def _stub_for_session(sess: dict[str, Any]):
 
 
 def _probe_raft(host: str, port: int) -> bool:
-    return probe_trading_port(host, port)
+    return probe_port_listening(host, port)
+
+
+def _probe_trading_fast(host: str, port: int) -> bool:
+    return probe_port_listening(host, port)
 
 
 class LoginBody(BaseModel):
@@ -137,8 +146,9 @@ def api_login(body: LoginBody) -> JSONResponse:
     out = {
         "user_id": session.user_id,
         "role": session.role,
-        "connected_peer": TRADING_PORT - 50051,
+        "connected_peer": TRADING_PORT - BASE_TRADING_PORT,
         "connected_port": TRADING_PORT,
+        "cluster_size": cluster_size(),
     }
     resp = JSONResponse(out)
     resp.set_cookie("ls_session", sid, httponly=True, samesite="lax", max_age=86400)
@@ -165,33 +175,50 @@ def api_me(request: Request) -> dict[str, Any]:
     return {
         "user_id": sess["user_id"],
         "role": sess["role"],
-        "connected_peer": sess["port"] - 50051,
+        "connected_peer": sess["port"] - BASE_TRADING_PORT,
         "connected_port": sess["port"],
+        "cluster_size": cluster_size(),
     }
+
+
+def _trade_get(sess: dict[str, Any], get_type: str, params: str = "") -> Any:
+    """Trade/admin reads that survive client-peer restarts by refreshing the gRPC token."""
+    try:
+        data, updates = get_data_resilient(
+            host=sess["host"],
+            port=int(sess["port"]),
+            token=sess["token"],
+            username=sess["username"],
+            password=sess["password"],
+            get_type=get_type,
+            params=params,
+            leader_port_hint=_leader_port_hint(),
+        )
+    except ValueError as err:
+        raise HTTPException(status_code=502, detail=str(err)) from err
+    if updates:
+        sess.update(updates)
+    return data
 
 
 @app.get("/api/trade/portfolio")
 def api_portfolio(request: Request) -> Any:
-    sess = _require_session(request)
-    return get_data(_stub_for_session(sess), sess["token"], "PORTFOLIO")
+    return _trade_get(_require_session(request), "PORTFOLIO")
 
 
 @app.get("/api/trade/orders")
 def api_orders(request: Request) -> Any:
-    sess = _require_session(request)
-    return get_data(_stub_for_session(sess), sess["token"], "ORDERS")
+    return _trade_get(_require_session(request), "ORDERS")
 
 
 @app.get("/api/trade/trades")
 def api_trades(request: Request) -> Any:
-    sess = _require_session(request)
-    return get_data(_stub_for_session(sess), sess["token"], "TRADES")
+    return _trade_get(_require_session(request), "TRADES")
 
 
 @app.get("/api/trade/book")
 def api_book(request: Request, symbol: str = "") -> Any:
-    sess = _require_session(request)
-    return get_data(_stub_for_session(sess), sess["token"], "BOOK", symbol.strip().upper())
+    return _trade_get(_require_session(request), "BOOK", symbol.strip().upper())
 
 
 @app.post("/api/trade/order")
@@ -232,14 +259,12 @@ def api_insight(body: InsightBody, request: Request) -> dict[str, str]:
 
 @app.get("/api/admin/portfolios")
 def api_admin_portfolios(request: Request) -> Any:
-    sess = _require_admin(request)
-    return get_data(_stub_for_session(sess), sess["token"], "ADMIN_PORTFOLIOS")
+    return _trade_get(_require_admin(request), "ADMIN_PORTFOLIOS")
 
 
 @app.get("/api/admin/order-log")
 def api_admin_order_log(request: Request) -> Any:
-    sess = _require_admin(request)
-    return get_data(_stub_for_session(sess), sess["token"], "ORDER_LOG")
+    return _trade_get(_require_admin(request), "ORDER_LOG")
 
 
 @app.post("/api/admin/reset")
@@ -300,7 +325,7 @@ def api_ops_cluster() -> dict[str, Any]:
         log_dir=LOG_DIR,
         pid_file=PID_FILE,
         host=TRADING_HOST,
-        probe_trading=probe_trading_port,
+        probe_trading=_probe_trading_fast,
         probe_raft=_probe_raft,
     )
 
@@ -358,10 +383,14 @@ def api_stop_peer(peer_id: int) -> dict[str, Any]:
 
 @app.post("/api/ops/peers/{peer_id}/start")
 def api_start_peer(peer_id: int) -> dict[str, Any]:
+    size = cluster_size()
+    if peer_id < 0 or peer_id >= size:
+        raise HTTPException(status_code=400, detail=f"peer_id must be 0..{size - 1}")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / f"peer{peer_id}.log"
     pids = json.loads(PID_FILE.read_text()) if PID_FILE.is_file() else {}
     env = os.environ.copy()
+    env["CLUSTER_SIZE"] = str(size)
     proc = subprocess.Popen(
         [sys.executable, str(_ROOT / "scripts" / "run_trading_peer.py"), str(peer_id)],
         stdout=open(log_path, "a", encoding="utf-8"),

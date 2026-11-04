@@ -395,9 +395,15 @@ td.sell {
 }
 
 /* Ops */
-.ops-grid {
+.ops-meta {
+  color: #666;
+  font-size: 10px;
+  font-family: var(--mono);
+}
+
+.ops-layout {
   display: grid;
-  grid-template-columns: minmax(280px, 320px) 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 2px;
   flex: 1;
   padding: 2px;
@@ -405,9 +411,9 @@ td.sell {
   min-height: 0;
 }
 
-.ops-logs-triple {
+.ops-logs-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 2px;
   min-height: 0;
   min-width: 0;
@@ -432,16 +438,22 @@ td.sell {
 }
 
 .peer-cards {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 2px;
   overflow: auto;
+  max-height: 46vh;
+  align-content: start;
 }
 
 .peer-card {
   border: 1px solid var(--panel-border);
   background: var(--panel);
-  padding: 10px;
+  padding: 10px 12px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .peer-card.leader {
@@ -458,25 +470,178 @@ td.sell {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: 2px;
 }
 
 .peer-title strong {
   color: var(--amber);
   font-size: 13px;
+  letter-spacing: 0.04em;
+}
+
+.peer-section-label {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--amber-dim);
+}
+
+.peer-timer {
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid #1a996055;
+  background: linear-gradient(180deg, #0c1a12 0%, #0a0a0a 100%);
+}
+
+.peer-timer.leader {
+  border-color: #33ff9966;
+}
+
+.peer-timer.down {
+  border-color: #442222;
+  opacity: 0.7;
+}
+
+.peer-timer.expired {
+  border-color: var(--red);
+}
+
+.peer-timer-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 4px;
+}
+
+.peer-timer-label {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--amber);
+}
+
+.peer-timer-meta {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: #666;
+}
+
+.peer-timer-value {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--amber);
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.peer-timer.leader .peer-timer-value {
+  color: #7dffb8;
+}
+
+.peer-timer.expired .peer-timer-value {
+  color: var(--red);
+}
+
+.peer-timer-bar {
+  height: 6px;
+  background: #111;
+  border: 1px solid #222;
+  overflow: hidden;
+}
+
+.peer-timer-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--amber);
+  transition: width 0.1s linear;
+}
+
+.peer-timer-fill.urgent {
+  background: #ffcc33;
+}
+
+.peer-timer-fill.empty {
+  background: var(--red);
+}
+
+.peer-timer-fill.syncing {
+  background: #4fc3f7;
+  width: 100% !important;
+  opacity: 0.85;
+  animation: timer-pulse 0.8s ease-in-out infinite;
+}
+
+.peer-timer.syncing .peer-timer-value {
+  color: #4fc3f7;
+  font-size: 16px;
+}
+
+@keyframes timer-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 10px;
 }
 
 .metric-row {
   display: flex;
   justify-content: space-between;
+  gap: 8px;
   font-family: var(--mono);
   font-size: 10px;
   padding: 2px 0;
   color: var(--text-dim);
+  border-bottom: 1px solid #141414;
 }
 
 .metric-row span.val {
   color: var(--text);
+  text-align: right;
+  word-break: break-all;
+}
+
+.metric-row.span-2 {
+  grid-column: 1 / -1;
+}
+
+.follower-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.follower-table th,
+.follower-table td {
+  text-align: left;
+  padding: 2px 4px;
+  border-bottom: 1px solid #1a1a1a;
+  color: var(--text-dim);
+}
+
+.follower-table th {
+  color: var(--amber-dim);
+  font-weight: 600;
+}
+
+.follower-table td.val {
+  color: var(--text);
+  text-align: right;
 }
 
 .ops-actions {
@@ -495,9 +660,21 @@ td.sell {
   cursor: pointer;
 }
 
+.ops-actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  border-color: #333;
+  color: #666;
+}
+
 .ops-actions button.danger {
   border-color: var(--red);
   color: var(--red);
+}
+
+.ops-actions button.danger:disabled {
+  border-color: #442222;
+  color: #664444;
 }
 
 .ops-toolbar {

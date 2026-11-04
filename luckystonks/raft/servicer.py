@@ -63,7 +63,7 @@ class RaftGrpcServicer(raft_pb2_grpc.RaftServicer):
                 reply["match_index"],
             )
         else:
-            self.log.debug(
+            self.log.info(
                 "rpc AppendEntries heartbeat from=%s term=%s ok=%s",
                 from_peer,
                 request.term,

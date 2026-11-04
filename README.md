@@ -10,10 +10,11 @@ The only 'Laxmi Chit Fund' you need !!!
 
 | Service | Port |
 |---------|------|
-| Trading gRPC | `50051` |
+| Trading gRPC (peers) | `50051`… (`CLUSTER_SIZE=5` → through `50055`) |
+| Raft peers | `60051`… (same size) |
 | Insight gRPC | `50070` |
 | vLLM HTTP (external) | `8000` or ngrok `/v1` |
-| Web terminal UI | `8765` (`bash scripts/run_demo_ui.sh`) |
+| Web terminal UI | `8765` (`bash scripts/run_demo_ui.sh`, default 5 peers) |
 
 Full steps: [RUN.md](RUN.md).
 

@@ -6,7 +6,16 @@
 bash scripts/run_demo_ui.sh
 ```
 
-Open **http://127.0.0.1:8765/** — **Trade** (login, orders on **follower** port 50052 by default), **Operations** (cluster health, leader, logs, stop/start peers, parity check), and **Admin** (visible only when logged in as seed user `admin` / `admin`: all portfolios, order log, market reset, cluster membership).
+Default cluster is **5 peers** (quorum 3). Switch to 3 peers anytime:
+
+```bash
+CLUSTER_SIZE=3 bash scripts/run_demo_ui.sh
+# default: CLUSTER_SIZE=5
+```
+
+When changing `3` ↔ `5`, prefer a fresh wipe (`UI_FRESH_CLUSTER=1`) so old peer state does not confuse the new topology.
+
+Open **http://127.0.0.1:8765/** — **Trade** (login, orders on **follower** port 50052 by default), **Operations** (Raft paper fields: `currentTerm`, `votedFor`, `commitIndex`, `lastApplied`, `lastLogIndex`/`lastLogTerm`, leader `nextIndex`/`matchIndex`, logs, stop/start peers, parity), and **Admin** (visible only when logged in as seed user `admin` / `admin`).
 
 Verify APIs (stack must be running):
 
@@ -14,7 +23,9 @@ Verify APIs (stack must be running):
 bash scripts/verify_ui.sh
 ```
 
-Env: `UI_CLIENT_TRADING_PORT=50052`, `UI_WEB_PORT=8765`, `UI_START_INSIGHT=1`.
+Env: `CLUSTER_SIZE=5|3`, `UI_CLIENT_TRADING_PORT=50052`, `UI_WEB_PORT=8765`, `UI_START_INSIGHT=1`.
+
+Raft timing (paper-style): election timeout random **3–5s** (`RAFT_ELECTION_TIMEOUT_MIN` / `MAX`), heartbeat **0.5s** (`RAFT_HEARTBEAT_INTERVAL`).
 
 **Stop** (from another terminal, or before re-running):
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -29,7 +30,17 @@ def connect_insight(host: str, port: int) -> llm_pb2_grpc.InsightStub:
     return llm_pb2_grpc.InsightStub(channel)
 
 
+def probe_port_listening(host: str, port: int, timeout: float = 0.15) -> bool:
+    """Fast TCP connect check — used by Ops so DOWN peers don't stall the UI (~0.8s gRPC probes)."""
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def probe_trading_port(host: str, port: int, timeout: float = 0.8) -> bool:
+    """gRPC channel readiness (login/routing). Prefer probe_port_listening for Ops polling."""
     try:
         channel = grpc.insecure_channel(f"{host}:{port}")
         grpc.channel_ready_future(channel).result(timeout=timeout)
@@ -153,11 +164,13 @@ def post_cluster(
                 "connected_port": connected_port,
             }
 
+    from luckystonks.cluster_size import BASE_TRADING_PORT, peer_ids
+
     ports_to_try: list[int] = []
     if leader_port_hint is not None and leader_port_hint != connected_port:
         ports_to_try.append(leader_port_hint)
-    for pid in (0, 1, 2):
-        p = 50051 + pid
+    for pid in peer_ids():
+        p = BASE_TRADING_PORT + pid
         if p != connected_port and p not in ports_to_try:
             ports_to_try.append(p)
 
@@ -208,8 +221,10 @@ def post_order_cluster(
 
 
 def _port_to_peer(port: int) -> int | None:
-    if 50051 <= port <= 50060:
-        return port - 50051
+    from luckystonks.cluster_size import BASE_TRADING_PORT, cluster_size
+
+    if BASE_TRADING_PORT <= port < BASE_TRADING_PORT + cluster_size():
+        return port - BASE_TRADING_PORT
     return None
 
 
@@ -220,6 +235,83 @@ def get_data(stub: Any, token: str, get_type: str, params: str = "") -> list[dic
     if reply.status != "OK":
         raise ValueError(f"get {get_type} failed")
     return [json.loads(item.data.decode("utf-8")) for item in reply.items]
+
+
+def _parse_get_items(reply: Any) -> list[dict[str, Any]] | None:
+    if reply.status != "OK":
+        return None
+    return [json.loads(item.data.decode("utf-8")) for item in reply.items]
+
+
+def get_data_resilient(
+    *,
+    host: str,
+    port: int,
+    token: str,
+    username: str,
+    password: str,
+    get_type: str,
+    params: str = "",
+    leader_port_hint: int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Fetch trading Get data, refreshing the session if the peer was restarted.
+
+    Login tokens are in-memory per peer. After Ops Stop/Start of the client peer,
+    the BFF cookie is still valid but the gRPC token is not. Re-login (same as
+    order routing) and return session field updates for the caller to apply.
+    """
+    from luckystonks.cluster_size import BASE_TRADING_PORT, cluster_size
+
+    # Prefer the leader so Trade reads match the peer that accepts/rejects orders.
+    # A restarted follower can briefly (or chronically) serve a divergent book.
+    ports: list[int] = []
+    for candidate in (leader_port_hint, port, *[BASE_TRADING_PORT + i for i in range(cluster_size())]):
+        if candidate is None:
+            continue
+        p = int(candidate)
+        if p not in ports:
+            ports.append(p)
+
+    # Fast path: existing token only when the preferred peer is the session peer.
+    preferred = ports[0] if ports else port
+    if preferred == port and probe_port_listening(host, port):
+        try:
+            stub = connect_trading(host, port)
+            reply = stub.Get(
+                trading_pb2.GetRequest(token=token, type=get_type, params=params), timeout=5
+            )
+            parsed = _parse_get_items(reply)
+            if parsed is not None:
+                return parsed, {}
+        except grpc.RpcError:
+            pass
+
+    last_err = f"get {get_type} failed (no reachable peer with a valid session)"
+    for p in ports:
+        if not probe_port_listening(host, p):
+            continue
+        try:
+            stub = connect_trading(host, p)
+            session = login(stub, username, password)
+            reply = stub.Get(
+                trading_pb2.GetRequest(token=session.token, type=get_type, params=params),
+                timeout=5,
+            )
+            parsed = _parse_get_items(reply)
+            if parsed is None:
+                last_err = f"get {get_type} failed on :{p}"
+                continue
+            return parsed, {
+                "token": session.token,
+                "port": p,
+                "host": host,
+                "user_id": session.user_id,
+                "role": session.role,
+            }
+        except (ValueError, grpc.RpcError) as err:
+            last_err = str(err)
+            continue
+    raise ValueError(last_err)
 
 
 def get_insight(stub: Any, query: str, context: str = "") -> str:

@@ -15,8 +15,14 @@ curl -sf "${BASE}/" | grep -qi "luckystonks" || { echo "FAIL: index"; exit 1; }
 curl -sf "${BASE}/api/ops/cluster" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
-assert 'peers' in d and len(d['peers'])==3
-print('cluster ok leader', d.get('leader_peer_id'))
+assert 'peers' in d
+n = int(d.get('cluster_size') or 0)
+assert n in (3, 5), n
+assert len(d['peers']) == n
+assert d.get('quorum') == n // 2 + 1
+raft = d['peers'][0].get('raft') or {}
+assert 'currentTerm' in raft and 'commitIndex' in raft and 'lastApplied' in raft
+print('cluster ok size', n, 'leader', d.get('leader_peer_id'))
 "
 
 COOKIE_JAR=$(mktemp)
